@@ -7,10 +7,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=IBM+Plex+Mono:wght@500;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.28.4/babel.min.js"></script>
   <style>
     .mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
     .archivo { font-family: 'Archivo', sans-serif; }
@@ -29,13 +29,8 @@
   <div id="root"></div>
 
   <script>
-    // ================================================================
-    // HIER EINTRAGEN: Werte aus deinem Supabase-Projekt
-    // (Dashboard -> Project Settings -> API)
-    // ================================================================
-    const SUPABASE_URL = "https://alamgpsnezekutvgwbbf.supabase.co";      // z. B. https://abcdefgh.supabase.co
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsYW1ncHNuZXpla3V0dmd3YmJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2NDQxNzcsImV4cCI6MjEwNTIyMDE3N30.ZnyoSJ5YnSnr13FejbfqMLYgYkpqCy6k5CqmjP5KR-w";      // der lange "anon public" Schlüssel
-    // ================================================================
+    const SUPABASE_URL = "https://alamgpsnezekutvgwbbf.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsYW1ncHNuZXpla3V0dmd3YmJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2NDQxNzcsImV4cCI6MjEwNTIyMDE3N30.ZnyoSJ5YnSnr13FejbfqMLYgYkpqCy6k5CqmjP5KR-w";
   </script>
 
   <script type="text/babel" data-presets="react">
@@ -143,7 +138,7 @@
 
     // ---------- Haupt-App ----------
     function App() {
-      const [session, setSession] = useState(undefined); // undefined = wird geprüft
+      const [session, setSession] = useState(undefined);
       const [state, setState] = useState(null);
       const [updatedAt, setUpdatedAt] = useState(null);
       const [tab, setTab] = useState("aktuell");
@@ -154,7 +149,6 @@
       const [fForm, setFForm] = useState({ datum: today(), startKm: "", endKm: "", preis: "" });
       const [verbrauchInput, setVerbrauchInput] = useState("");
 
-      // Session prüfen
       useEffect(() => {
         sb.auth.getSession().then(({ data }) => setSession(data.session));
         const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
