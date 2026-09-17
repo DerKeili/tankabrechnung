@@ -325,10 +325,12 @@
             {tab === "aktuell" && (
               <React.Fragment>
                 <Abschnitt titel="Tankung erfassen" hinweis="Großes Auto voll + Kanister. Nur der Kanister zählt auf die Rechnung.">
-                  <div className="grid grid-cols-3 gap-2">
-                    <Feld label="Datum">
-                      <input type="date" className={inputCls} value={tForm.datum} onChange={(e) => setTForm({ ...tForm, datum: e.target.value })} />
-                    </Feld>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="col-span-2">
+                      <Feld label="Datum">
+                        <input type="date" className={inputCls} value={tForm.datum} onChange={(e) => setTForm({ ...tForm, datum: e.target.value })} />
+                      </Feld>
+                    </div>
                     <Feld label="Preis €/l">
                       <input inputMode="decimal" placeholder="1,589" className={inputCls} value={tForm.preis} onChange={(e) => setTForm({ ...tForm, preis: e.target.value })} />
                     </Feld>
@@ -354,7 +356,7 @@
                   )}
                 </Abschnitt>
 
-                <Abschnitt titel="Fahrt mit dem großen Auto" hinweis="Anfangs- und Endkilometerstand eintragen. Preis wird von der letzten Tankung übernommen.">
+                <Abschnitt titel="Fahrt mit Roomi" hinweis="Anfangs- und Endkilometerstand eintragen. Preis wird von der letzten Tankung übernommen.">
                   <div className="grid grid-cols-2 gap-2">
                     <Feld label="Datum">
                       <input type="date" className={inputCls} value={fForm.datum} onChange={(e) => setFForm({ ...fForm, datum: e.target.value })} />
