@@ -74,11 +74,11 @@
     }
 
     // ---------- UI-Bausteine ----------
-    const inputCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[15px] text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-700/40 focus:border-teal-700";
+    const inputCls = "w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[15px] text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-700/40 focus:border-teal-700";
 
     function Feld({ label, children }) {
       return (
-        <label className="block">
+        <label className="block min-w-0">
           <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">{label}</span>
           {children}
         </label>
@@ -292,7 +292,7 @@
                     <span className="mono font-semibold">{fmtEUR(calc.kanisterKosten)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-600">Fahrten großes Auto ({fmtNum(calc.kmGesamt, 0)} km)</span>
+                    <span className="text-slate-600">Fahrt mit Roomi ({fmtNum(calc.kmGesamt, 0)} km)</span>
                     <span className="mono font-semibold">{fmtEUR(calc.fahrtKosten)}</span>
                   </div>
                   <div className="flex justify-between text-[12px] text-slate-400">
@@ -326,7 +326,7 @@
               <React.Fragment>
                 <Abschnitt titel="Tankung erfassen" hinweis="Großes Auto voll + Kanister. Nur der Kanister zählt auf die Rechnung.">
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="col-span-2">
+                    <div className="col-span-2 min-w-0">
                       <Feld label="Datum">
                         <input type="date" className={inputCls} value={tForm.datum} onChange={(e) => setTForm({ ...tForm, datum: e.target.value })} />
                       </Feld>
