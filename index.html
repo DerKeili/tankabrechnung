@@ -1,2 +1,443 @@
-const SUPABASE_URL = "https://alamgpsnezekutvgwbbf.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsYW1ncHNuZXpla3V0dmd3YmJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2NDQxNzcsImV4cCI6MjEwNTIyMDE3N30.ZnyoSJ5YnSnr13FejbfqMLYgYkpqCy6k5CqmjP5KR-w";
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tankabrechnung</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=IBM+Plex+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    .mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+    .archivo { font-family: 'Archivo', sans-serif; }
+    .beleg-kante {
+      background:
+        linear-gradient(-45deg, transparent 8px, #ffffff 0) bottom left,
+        linear-gradient(45deg, transparent 8px, #ffffff 0) bottom right;
+      background-size: 51% 16px;
+      background-repeat: no-repeat;
+      height: 16px;
+    }
+    body { background: #f1f5f9; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    // ================================================================
+    // HIER EINTRAGEN: Werte aus deinem Supabase-Projekt
+    // (Dashboard -> Project Settings -> API)
+    // ================================================================
+    const SUPABASE_URL = "HIER_DEINE_SUPABASE_URL";      // z. B. https://abcdefgh.supabase.co
+    const SUPABASE_ANON_KEY = "HIER_DEIN_ANON_KEY";      // der lange "anon public" Schlüssel
+    // ================================================================
+  </script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useCallback } = React;
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ---------- Hilfsfunktionen ----------
+    const fmtEUR = (n) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(isFinite(n) ? n : 0);
+    const fmtNum = (n, d = 1) => new Intl.NumberFormat("de-DE", { minimumFractionDigits: d, maximumFractionDigits: d }).format(isFinite(n) ? n : 0);
+    const fmtDate = (iso) => iso ? new Date(iso + "T12:00:00").toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" }) : "";
+    const fmtZeit = (ts) => ts ? new Date(ts).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+    const parseDE = (s) => { if (typeof s === "number") return s; if (!s) return NaN; return parseFloat(String(s).replace(",", ".")); };
+    const today = () => new Date().toISOString().slice(0, 10);
+    const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+    const leererStand = { verbrauch: 7.5, tankungen: [], fahrten: [], history: [] };
+
+    function berechne(state) {
+      const kanisterKosten = state.tankungen.reduce((s, t) => s + t.preis * t.liter, 0);
+      const fahrtDetails = state.fahrten.map((f) => {
+        const km = Math.max(0, f.endKm - f.startKm);
+        const liter = (km / 100) * state.verbrauch;
+        return { ...f, km, liter, kosten: liter * f.preis };
+      });
+      const fahrtKosten = fahrtDetails.reduce((s, f) => s + f.kosten, 0);
+      const kmGesamt = fahrtDetails.reduce((s, f) => s + f.km, 0);
+      return { kanisterKosten, fahrtDetails, fahrtKosten, kmGesamt, gesamt: kanisterKosten + fahrtKosten };
+    }
+
+    // ---------- Datenbank ----------
+    async function ladeStand() {
+      const { data, error } = await sb.from("abrechnung").select("data, updated_at").eq("id", 1).single();
+      if (error) throw error;
+      return { stand: { ...leererStand, ...data.data }, updatedAt: data.updated_at };
+    }
+    async function speichereStand(stand) {
+      const { error } = await sb.from("abrechnung")
+        .update({ data: stand, updated_at: new Date().toISOString() })
+        .eq("id", 1);
+      if (error) throw error;
+    }
+
+    // ---------- UI-Bausteine ----------
+    const inputCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[15px] text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-700/40 focus:border-teal-700";
+
+    function Feld({ label, children }) {
+      return (
+        <label className="block">
+          <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">{label}</span>
+          {children}
+        </label>
+      );
+    }
+
+    function Abschnitt({ titel, hinweis, children }) {
+      return (
+        <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-4 pt-4 pb-2">
+            <h2 className="archivo text-[17px] font-bold text-slate-900">{titel}</h2>
+            {hinweis && <p className="text-[12px] text-slate-500 mt-0.5">{hinweis}</p>}
+          </div>
+          <div className="px-4 pb-4">{children}</div>
+        </section>
+      );
+    }
+
+    // ---------- Login ----------
+    function Login({ onFehler, fehler }) {
+      const [email, setEmail] = useState("");
+      const [passwort, setPasswort] = useState("");
+      const [laedt, setLaedt] = useState(false);
+
+      const anmelden = async () => {
+        setLaedt(true);
+        const { error } = await sb.auth.signInWithPassword({ email, password: passwort });
+        setLaedt(false);
+        if (error) onFehler("Anmeldung fehlgeschlagen. E-Mail und Passwort prüfen.");
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4">
+          <div className="w-full max-w-sm">
+            <div className="bg-teal-900 text-white rounded-t-2xl px-6 pt-6 pb-5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-teal-300">Familien-Tankkasse</p>
+              <h1 className="archivo text-2xl font-extrabold">Tankabrechnung</h1>
+            </div>
+            <div className="bg-white rounded-b-2xl shadow-md px-6 py-6 space-y-3">
+              <Feld label="E-Mail">
+                <input type="email" className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+              </Feld>
+              <Feld label="Passwort">
+                <input type="password" className={inputCls} value={passwort} onChange={(e) => setPasswort(e.target.value)} autoComplete="current-password"
+                  onKeyDown={(e) => e.key === "Enter" && anmelden()} />
+              </Feld>
+              {fehler && <p className="text-[13px] text-red-600">{fehler}</p>}
+              <button onClick={anmelden} disabled={laedt}
+                className="archivo w-full rounded-xl bg-amber-400 hover:bg-amber-300 disabled:opacity-60 text-teal-950 font-bold py-3 text-[15px] transition-colors">
+                {laedt ? "Anmelden …" : "Anmelden"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- Haupt-App ----------
+    function App() {
+      const [session, setSession] = useState(undefined); // undefined = wird geprüft
+      const [state, setState] = useState(null);
+      const [updatedAt, setUpdatedAt] = useState(null);
+      const [tab, setTab] = useState("aktuell");
+      const [fehler, setFehler] = useState("");
+      const [sync, setSync] = useState("");
+
+      const [tForm, setTForm] = useState({ datum: today(), preis: "", liter: "20" });
+      const [fForm, setFForm] = useState({ datum: today(), startKm: "", endKm: "", preis: "" });
+      const [verbrauchInput, setVerbrauchInput] = useState("");
+
+      // Session prüfen
+      useEffect(() => {
+        sb.auth.getSession().then(({ data }) => setSession(data.session));
+        const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
+        return () => sub.subscription.unsubscribe();
+      }, []);
+
+      const laden = useCallback(async () => {
+        try {
+          setSync("Lade …");
+          const { stand, updatedAt } = await ladeStand();
+          setState(stand);
+          setUpdatedAt(updatedAt);
+          setVerbrauchInput(String(stand.verbrauch).replace(".", ","));
+          setFehler("");
+          setSync("");
+        } catch (e) {
+          setSync("");
+          setFehler("Daten konnten nicht geladen werden. Verbindung prüfen und neu laden.");
+        }
+      }, []);
+
+      useEffect(() => { if (session) laden(); }, [session, laden]);
+
+      const speichern = async (neu) => {
+        setState(neu);
+        try {
+          setSync("Speichere …");
+          await speichereStand(neu);
+          setUpdatedAt(new Date().toISOString());
+          setSync("");
+        } catch (e) {
+          setSync("");
+          setFehler("Speichern fehlgeschlagen. Verbindung prüfen und erneut versuchen.");
+        }
+      };
+
+      if (session === undefined) {
+        return <div className="min-h-screen flex items-center justify-center text-slate-500">Lade …</div>;
+      }
+      if (!session) {
+        return <Login fehler={fehler} onFehler={setFehler} />;
+      }
+      if (!state) {
+        return (
+          <div className="min-h-screen flex items-center justify-center text-slate-500">
+            {fehler ? (
+              <div className="text-center px-6">
+                <p className="text-red-600 mb-3">{fehler}</p>
+                <button onClick={laden} className="rounded-xl bg-teal-800 text-white font-semibold px-5 py-2">Erneut laden</button>
+              </div>
+            ) : "Lade Abrechnung …"}
+          </div>
+        );
+      }
+
+      const calc = berechne(state);
+      const letzterPreis = state.tankungen.length ? state.tankungen[state.tankungen.length - 1].preis : null;
+
+      const tankungHinzufuegen = () => {
+        const preis = parseDE(tForm.preis);
+        const liter = parseDE(tForm.liter);
+        if (!isFinite(preis) || preis <= 0 || !isFinite(liter) || liter <= 0) {
+          setFehler("Bitte gültigen Literpreis und Litermenge eingeben."); return;
+        }
+        setFehler("");
+        speichern({ ...state, tankungen: [...state.tankungen, { id: uid(), datum: tForm.datum, preis, liter }] });
+        setTForm({ datum: today(), preis: "", liter: "20" });
+      };
+
+      const fahrtHinzufuegen = () => {
+        const startKm = parseDE(fForm.startKm);
+        const endKm = parseDE(fForm.endKm);
+        const preis = parseDE(fForm.preis || (letzterPreis ?? ""));
+        if (!isFinite(startKm) || !isFinite(endKm) || endKm <= startKm) {
+          setFehler("End-km muss größer als Anfangs-km sein."); return;
+        }
+        if (!isFinite(preis) || preis <= 0) {
+          setFehler("Kein Literpreis vorhanden – bitte eingeben oder erst tanken."); return;
+        }
+        setFehler("");
+        speichern({ ...state, fahrten: [...state.fahrten, { id: uid(), datum: fForm.datum, startKm, endKm, preis }] });
+        setFForm({ datum: today(), startKm: String(endKm), endKm: "", preis: "" });
+      };
+
+      const eintragLoeschen = (art, id) => {
+        speichern({ ...state, [art]: state[art].filter((e) => e.id !== id) });
+      };
+
+      const verbrauchSpeichern = () => {
+        const v = parseDE(verbrauchInput);
+        if (!isFinite(v) || v <= 0) { setFehler("Bitte gültigen Verbrauch eingeben."); return; }
+        setFehler("");
+        speichern({ ...state, verbrauch: v });
+      };
+
+      const alsBezahltMarkieren = () => {
+        if (calc.gesamt <= 0) return;
+        if (!window.confirm(`Gesamtbetrag ${fmtEUR(calc.gesamt)} als bezahlt markieren und neue Abrechnung starten?`)) return;
+        speichern({
+          ...state,
+          tankungen: [],
+          fahrten: [],
+          history: [{
+            id: uid(), bezahltAm: today(), gesamt: calc.gesamt,
+            kanisterKosten: calc.kanisterKosten, fahrtKosten: calc.fahrtKosten,
+            kmGesamt: calc.kmGesamt, verbrauch: state.verbrauch,
+            tankungen: state.tankungen, fahrten: state.fahrten,
+          }, ...state.history],
+        });
+        setTab("verlauf");
+      };
+
+      return (
+        <div className="min-h-screen text-slate-900 pb-10">
+          <header className="bg-teal-900 text-white px-4 pt-5 pb-14">
+            <div className="max-w-md mx-auto flex items-start justify-between">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-teal-300">Familien-Tankkasse</p>
+                <h1 className="archivo text-2xl font-extrabold">Tankabrechnung</h1>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={laden} title="Neu laden"
+                  className="rounded-lg bg-teal-800 hover:bg-teal-700 px-3 py-1.5 text-[13px] font-semibold">↻</button>
+                <button onClick={() => sb.auth.signOut()}
+                  className="rounded-lg bg-teal-800 hover:bg-teal-700 px-3 py-1.5 text-[13px] font-semibold">Abmelden</button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-md mx-auto px-4 -mt-10 space-y-4">
+            <div className="drop-shadow-md">
+              <div className="bg-white rounded-t-2xl px-5 pt-5 pb-3">
+                <div className="flex items-baseline justify-between">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Offener Betrag</p>
+                  <p className="text-[11px] text-slate-400">{sync || (updatedAt && `Stand: ${fmtZeit(updatedAt)}`)}</p>
+                </div>
+                <p className="mono text-4xl font-bold text-teal-900 mt-1">{fmtEUR(calc.gesamt)}</p>
+                <div className="mt-4 space-y-1.5 text-[14px] border-t border-dashed border-slate-300 pt-3">
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Kanister ({fmtNum(state.tankungen.reduce((s, t) => s + t.liter, 0), 0)} l gesamt)</span>
+                    <span className="mono font-semibold">{fmtEUR(calc.kanisterKosten)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Fahrten großes Auto ({fmtNum(calc.kmGesamt, 0)} km)</span>
+                    <span className="mono font-semibold">{fmtEUR(calc.fahrtKosten)}</span>
+                  </div>
+                  <div className="flex justify-between text-[12px] text-slate-400">
+                    <span>Verbrauch: {fmtNum(state.verbrauch)} l/100 km</span>
+                    {letzterPreis && <span>zuletzt {fmtNum(letzterPreis, 3)} €/l</span>}
+                  </div>
+                </div>
+                <button onClick={alsBezahltMarkieren} disabled={calc.gesamt <= 0}
+                  className="archivo mt-4 w-full rounded-xl bg-amber-400 hover:bg-amber-300 disabled:bg-slate-200 disabled:text-slate-400 text-teal-950 font-bold py-3 text-[15px] transition-colors">
+                  Als bezahlt markieren
+                </button>
+              </div>
+              <div className="beleg-kante"></div>
+            </div>
+
+            {fehler && (
+              <div className="rounded-xl bg-red-50 border border-red-200 text-red-700 text-[14px] px-4 py-3">{fehler}</div>
+            )}
+
+            <nav className="flex gap-1 bg-slate-200 rounded-xl p-1">
+              {[["aktuell", "Erfassen"], ["verlauf", `Verlauf (${state.history.length})`], ["einstellungen", "Auto"]].map(([key, label]) => (
+                <button key={key} onClick={() => setTab(key)}
+                  className={"flex-1 rounded-lg py-2 text-[14px] font-semibold transition-colors " +
+                    (tab === key ? "bg-white text-teal-900 shadow-sm" : "text-slate-600")}>
+                  {label}
+                </button>
+              ))}
+            </nav>
+
+            {tab === "aktuell" && (
+              <React.Fragment>
+                <Abschnitt titel="Tankung erfassen" hinweis="Großes Auto voll + Kanister. Nur der Kanister zählt auf die Rechnung.">
+                  <div className="grid grid-cols-3 gap-2">
+                    <Feld label="Datum">
+                      <input type="date" className={inputCls} value={tForm.datum} onChange={(e) => setTForm({ ...tForm, datum: e.target.value })} />
+                    </Feld>
+                    <Feld label="Preis €/l">
+                      <input inputMode="decimal" placeholder="1,589" className={inputCls} value={tForm.preis} onChange={(e) => setTForm({ ...tForm, preis: e.target.value })} />
+                    </Feld>
+                    <Feld label="Kanister l">
+                      <input inputMode="decimal" className={inputCls} value={tForm.liter} onChange={(e) => setTForm({ ...tForm, liter: e.target.value })} />
+                    </Feld>
+                  </div>
+                  <button onClick={tankungHinzufuegen} className="mt-3 w-full rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                    Tankung hinzufügen
+                  </button>
+                  {state.tankungen.length > 0 && (
+                    <ul className="mt-3 divide-y divide-slate-100">
+                      {state.tankungen.slice().reverse().map((t) => (
+                        <li key={t.id} className="flex items-center justify-between py-2 text-[14px]">
+                          <span className="text-slate-600">{fmtDate(t.datum)} · {fmtNum(t.liter, 0)} l × {fmtNum(t.preis, 3)} €</span>
+                          <span className="flex items-center gap-3">
+                            <span className="mono font-semibold">{fmtEUR(t.liter * t.preis)}</span>
+                            <button onClick={() => eintragLoeschen("tankungen", t.id)} className="text-slate-400 hover:text-red-600" aria-label="Tankung löschen">✕</button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Abschnitt>
+
+                <Abschnitt titel="Fahrt mit dem großen Auto" hinweis="Anfangs- und Endkilometerstand eintragen. Preis wird von der letzten Tankung übernommen.">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Feld label="Datum">
+                      <input type="date" className={inputCls} value={fForm.datum} onChange={(e) => setFForm({ ...fForm, datum: e.target.value })} />
+                    </Feld>
+                    <Feld label="Preis €/l (optional)">
+                      <input inputMode="decimal" placeholder={letzterPreis ? fmtNum(letzterPreis, 3) : "z. B. 1,589"} className={inputCls}
+                        value={fForm.preis} onChange={(e) => setFForm({ ...fForm, preis: e.target.value })} />
+                    </Feld>
+                    <Feld label="Anfangs-km">
+                      <input inputMode="numeric" placeholder="84250" className={inputCls} value={fForm.startKm} onChange={(e) => setFForm({ ...fForm, startKm: e.target.value })} />
+                    </Feld>
+                    <Feld label="End-km">
+                      <input inputMode="numeric" placeholder="84410" className={inputCls} value={fForm.endKm} onChange={(e) => setFForm({ ...fForm, endKm: e.target.value })} />
+                    </Feld>
+                  </div>
+                  <button onClick={fahrtHinzufuegen} className="mt-3 w-full rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                    Fahrt hinzufügen
+                  </button>
+                  {calc.fahrtDetails.length > 0 && (
+                    <ul className="mt-3 divide-y divide-slate-100">
+                      {calc.fahrtDetails.slice().reverse().map((f) => (
+                        <li key={f.id} className="flex items-center justify-between py-2 text-[14px]">
+                          <span className="text-slate-600">{fmtDate(f.datum)} · {fmtNum(f.km, 0)} km · {fmtNum(f.liter, 1)} l</span>
+                          <span className="flex items-center gap-3">
+                            <span className="mono font-semibold">{fmtEUR(f.kosten)}</span>
+                            <button onClick={() => eintragLoeschen("fahrten", f.id)} className="text-slate-400 hover:text-red-600" aria-label="Fahrt löschen">✕</button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Abschnitt>
+              </React.Fragment>
+            )}
+
+            {tab === "einstellungen" && (
+              <Abschnitt titel="Großes Auto" hinweis="Der Verbrauch wird für die Kostenberechnung der Fahrten genutzt.">
+                <Feld label="Verbrauch l/100 km">
+                  <div className="flex gap-2">
+                    <input inputMode="decimal" className={inputCls} value={verbrauchInput} onChange={(e) => setVerbrauchInput(e.target.value)} />
+                    <button onClick={verbrauchSpeichern} className="rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold px-5 text-[14px] transition-colors">
+                      Speichern
+                    </button>
+                  </div>
+                </Feld>
+                <p className="text-[13px] text-slate-500 mt-3">
+                  Formel: km × Verbrauch ÷ 100 × Literpreis. Der Kanister wird 1:1 zum Tankpreis berechnet.
+                </p>
+              </Abschnitt>
+            )}
+
+            {tab === "verlauf" && (
+              <Abschnitt titel="Bezahlte Abrechnungen"
+                hinweis={state.history.length === 0 ? "Noch keine abgeschlossene Abrechnung." : undefined}>
+                {state.history.length > 0 && (
+                  <ul className="divide-y divide-slate-100">
+                    {state.history.map((h) => (
+                      <li key={h.id} className="py-3">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-[15px]">Bezahlt am {fmtDate(h.bezahltAm)}</span>
+                          <span className="mono font-bold text-teal-900 text-[16px]">{fmtEUR(h.gesamt)}</span>
+                        </div>
+                        <p className="text-[13px] text-slate-500 mt-0.5">
+                          Kanister {fmtEUR(h.kanisterKosten)} · Fahrten {fmtEUR(h.fahrtKosten)} ({fmtNum(h.kmGesamt, 0)} km) · {fmtNum(h.verbrauch)} l/100 km
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Abschnitt>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
