@@ -148,7 +148,7 @@
       const [fehler, setFehler] = useState("");
       const [sync, setSync] = useState("");
 
-      const [tForm, setTForm] = useState({ datum: today(), preis: "", liter: "20", tankinhalt: "", km: "" });
+      const [tForm, setTForm] = useState({ datum: today(), gesamt: "", liter: "20", gesamtbetrag: "", km: "" });
       const [fForm, setFForm] = useState({ datum: today(), startKm: "", endKm: "" });
       const [bearbeiteTankungId, setBearbeiteTankungId] = useState(null);
       const [bearbeiteFahrtId, setBearbeiteFahrtId] = useState(null);
@@ -221,35 +221,47 @@
 
       const calc = berechne(state);
       const letzterPreis = state.tankungen.length ? state.tankungen[state.tankungen.length - 1].preis : null;
-      const tVerbrauchVorschau = (() => {
-        const ti = parseDE(tForm.tankinhalt);
+      const tVorschau = (() => {
+        const gesamt = parseDE(tForm.gesamt);
+        const kanister = parseDE(tForm.liter);
+        const betrag = parseDE(tForm.gesamtbetrag);
         const km = parseDE(tForm.km);
-        if (isFinite(ti) && ti > 0 && isFinite(km) && km > 0) return (ti / km) * 100;
-        return null;
+        if (!isFinite(gesamt) || gesamt <= 0) return null;
+        const literpreis = isFinite(betrag) && betrag > 0 ? betrag / gesamt : null;
+        const roomiListe = isFinite(kanister) ? gesamt - kanister : null;
+        const verbrauch = roomiListe != null && roomiListe > 0 && isFinite(km) && km > 0 ? (roomiListe / km) * 100 : null;
+        return { literpreis, roomiListe, verbrauch };
       })();
 
       const tankungHinzufuegen = () => {
-        const preis = parseDE(tForm.preis);
+        const gesamt = parseDE(tForm.gesamt);
         const liter = parseDE(tForm.liter);
-        if (!isFinite(preis) || preis <= 0 || !isFinite(liter) || liter <= 0) {
-          setFehler("Bitte gültigen Literpreis und Litermenge eingeben."); return;
+        const gesamtbetrag = parseDE(tForm.gesamtbetrag);
+        if (!isFinite(gesamt) || gesamt <= 0) {
+          setFehler("Bitte gültige Gesamt-Betankung in Litern eingeben."); return;
         }
-        const tiRoh = tForm.tankinhalt.trim();
+        if (!isFinite(liter) || liter < 0) {
+          setFehler("Bitte gültige Kanister-Menge eingeben."); return;
+        }
+        if (liter > gesamt) {
+          setFehler("Die Kanister-Menge kann nicht größer als die Gesamt-Betankung sein."); return;
+        }
+        if (!isFinite(gesamtbetrag) || gesamtbetrag <= 0) {
+          setFehler("Bitte gültigen Gesamtbetrag eingeben."); return;
+        }
         const kmRoh = tForm.km.trim();
-        if ((tiRoh === "") !== (kmRoh === "")) {
-          setFehler("Bitte Tankinhalt und gefahrene km beide ausfüllen oder beide leer lassen."); return;
-        }
-        let neuerVerbrauch = null, tankinhalt = null, km = null;
-        if (tiRoh !== "" && kmRoh !== "") {
-          tankinhalt = parseDE(tiRoh);
+        let km = null;
+        if (kmRoh !== "") {
           km = parseDE(kmRoh);
-          if (!isFinite(tankinhalt) || tankinhalt <= 0 || !isFinite(km) || km <= 0) {
-            setFehler("Bitte gültigen Tankinhalt und gültige gefahrene km eingeben."); return;
+          if (!isFinite(km) || km <= 0) {
+            setFehler("Bitte gültige gefahrene km eingeben oder das Feld leer lassen."); return;
           }
-          neuerVerbrauch = (tankinhalt / km) * 100;
         }
         setFehler("");
-        const eintrag = { datum: tForm.datum, preis, liter, tankinhalt, km, verbrauch: neuerVerbrauch };
+        const preis = gesamtbetrag / gesamt;
+        const roomiListe = gesamt - liter;
+        const neuerVerbrauch = km != null && roomiListe > 0 ? (roomiListe / km) * 100 : null;
+        const eintrag = { datum: tForm.datum, preis, liter, gesamt, gesamtbetrag, km, verbrauch: neuerVerbrauch };
         if (bearbeiteTankungId) {
           speichern({
             ...state,
@@ -266,23 +278,23 @@
             tankungen: [...state.tankungen, { id: uid(), ...eintrag }],
           });
         }
-        setTForm({ datum: today(), preis: "", liter: "20", tankinhalt: "", km: "" });
+        setTForm({ datum: today(), gesamt: "", liter: "20", gesamtbetrag: "", km: "" });
       };
 
       const tankungBearbeiten = (t) => {
         setBearbeiteTankungId(t.id);
         setTForm({
           datum: t.datum,
-          preis: String(t.preis).replace(".", ","),
+          gesamt: t.gesamt != null ? String(t.gesamt).replace(".", ",") : "",
           liter: String(t.liter),
-          tankinhalt: t.tankinhalt != null ? String(t.tankinhalt).replace(".", ",") : "",
+          gesamtbetrag: t.gesamtbetrag != null ? String(t.gesamtbetrag).replace(".", ",") : "",
           km: t.km != null ? String(t.km) : "",
         });
       };
 
       const tankungBearbeitenAbbrechen = () => {
         setBearbeiteTankungId(null);
-        setTForm({ datum: today(), preis: "", liter: "20", tankinhalt: "", km: "" });
+        setTForm({ datum: today(), gesamt: "", liter: "20", gesamtbetrag: "", km: "" });
       };
 
       const fahrtHinzufuegen = () => {
@@ -415,30 +427,34 @@
 
             {tab === "aktuell" && (
               <React.Fragment>
-                <Abschnitt titel="Tankung erfassen" hinweis="Großes Auto voll + Kanister. Aus Tankinhalt und gefahrenen km berechnet sich der Verbrauch automatisch.">
+                <Abschnitt titel="Tankung erfassen" hinweis="Gesamtmenge, Kanister-Anteil und Gesamtbetrag eingeben – Literpreis und Roomis Verbrauch werden automatisch berechnet.">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="col-span-2 min-w-0">
                       <Feld label="Datum">
                         <input type="date" className={dateInputCls} value={tForm.datum} onChange={(e) => setTForm({ ...tForm, datum: e.target.value })} />
                       </Feld>
                     </div>
-                    <Feld label="Preis €/l">
-                      <input inputMode="decimal" placeholder="1,589" className={inputCls} value={tForm.preis} onChange={(e) => setTForm({ ...tForm, preis: e.target.value })} />
+                    <Feld label="Gesamt Betankung l">
+                      <input inputMode="decimal" placeholder="z. B. 68,3" className={inputCls} value={tForm.gesamt} onChange={(e) => setTForm({ ...tForm, gesamt: e.target.value })} />
                     </Feld>
-                    <Feld label="Kanister l">
+                    <Feld label="davon Kanister l">
                       <input inputMode="decimal" className={inputCls} value={tForm.liter} onChange={(e) => setTForm({ ...tForm, liter: e.target.value })} />
                     </Feld>
-                    <Feld label="Tankinhalt großes Auto l">
-                      <input inputMode="decimal" placeholder="z. B. 48,3" className={inputCls} value={tForm.tankinhalt} onChange={(e) => setTForm({ ...tForm, tankinhalt: e.target.value })} />
+                    <Feld label="Gesamtbetrag bezahlt €">
+                      <input inputMode="decimal" placeholder="z. B. 108,50" className={inputCls} value={tForm.gesamtbetrag} onChange={(e) => setTForm({ ...tForm, gesamtbetrag: e.target.value })} />
                     </Feld>
                     <Feld label="Gefahrene km seit letzter Tankung">
                       <input inputMode="numeric" placeholder="z. B. 620" className={inputCls} value={tForm.km} onChange={(e) => setTForm({ ...tForm, km: e.target.value })} />
                     </Feld>
                   </div>
                   <p className="mt-2 text-[12px] text-slate-500">
-                    {tVerbrauchVorschau
-                      ? `Berechneter Verbrauch: ${fmtNum(tVerbrauchVorschau)} l/100 km`
-                      : "Tankinhalt und km ausfüllen, um den Verbrauch automatisch zu berechnen (sonst bleibt der bisherige Verbrauch bestehen)."}
+                    {tVorschau
+                      ? [
+                          tVorschau.literpreis ? `Literpreis: ${fmtNum(tVorschau.literpreis, 3)} €/l` : null,
+                          tVorschau.roomiListe != null ? `Roomi: ${fmtNum(tVorschau.roomiListe)} l` : null,
+                          tVorschau.verbrauch ? `Verbrauch: ${fmtNum(tVorschau.verbrauch)} l/100 km` : null,
+                        ].filter(Boolean).join(" · ") || "Gesamtmenge eingeben, um Literpreis zu berechnen."
+                      : "Gesamtmenge eingeben, um Literpreis zu berechnen."}
                   </p>
                   <div className="mt-3 flex gap-2">
                     <button onClick={tankungHinzufuegen} className="flex-1 rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
@@ -455,9 +471,9 @@
                       {state.tankungen.slice().reverse().map((t) => (
                         <li key={t.id} className={"flex items-center justify-between py-2 text-[14px]" + (bearbeiteTankungId === t.id ? " bg-amber-50 -mx-4 px-4" : "")}>
                           <span className="text-slate-600">
-                            {fmtDate(t.datum)} · {fmtNum(t.liter, 0)} l × {fmtNum(t.preis, 3)} €
-                            {t.verbrauch != null && (
-                              <span className="block text-[12px] text-slate-400">{fmtNum(t.tankinhalt)} l auf {fmtNum(t.km, 0)} km → {fmtNum(t.verbrauch)} l/100 km</span>
+                            {fmtDate(t.datum)} · {fmtNum(t.gesamt != null ? t.gesamt : t.liter)} l gesamt · {fmtNum(t.preis, 3)} €/l
+                            {t.verbrauch != null && t.gesamt != null && (
+                              <span className="block text-[12px] text-slate-400">Roomi {fmtNum(t.gesamt - t.liter)} l auf {fmtNum(t.km, 0)} km → {fmtNum(t.verbrauch)} l/100 km</span>
                             )}
                           </span>
                           <span className="flex items-center gap-3">
