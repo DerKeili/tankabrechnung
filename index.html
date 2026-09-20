@@ -148,7 +148,7 @@
       const [fehler, setFehler] = useState("");
       const [sync, setSync] = useState("");
 
-      const [tForm, setTForm] = useState({ datum: today(), preis: "", liter: "20" });
+      const [tForm, setTForm] = useState({ datum: today(), preis: "", liter: "20", tankinhalt: "", km: "" });
       const [fForm, setFForm] = useState({ datum: today(), startKm: "", endKm: "" });
       const [bearbeiteTankungId, setBearbeiteTankungId] = useState(null);
       const [bearbeiteFahrtId, setBearbeiteFahrtId] = useState(null);
@@ -176,6 +176,10 @@
       }, []);
 
       useEffect(() => { if (session) laden(); }, [session, laden]);
+
+      useEffect(() => {
+        if (state) setVerbrauchInput(String(state.verbrauch).replace(".", ","));
+      }, [state && state.verbrauch]);
 
       useEffect(() => {
         if (!state || !state.fahrten.length) return;
@@ -217,6 +221,12 @@
 
       const calc = berechne(state);
       const letzterPreis = state.tankungen.length ? state.tankungen[state.tankungen.length - 1].preis : null;
+      const tVerbrauchVorschau = (() => {
+        const ti = parseDE(tForm.tankinhalt);
+        const km = parseDE(tForm.km);
+        if (isFinite(ti) && ti > 0 && isFinite(km) && km > 0) return (ti / km) * 100;
+        return null;
+      })();
 
       const tankungHinzufuegen = () => {
         const preis = parseDE(tForm.preis);
@@ -224,29 +234,55 @@
         if (!isFinite(preis) || preis <= 0 || !isFinite(liter) || liter <= 0) {
           setFehler("Bitte gültigen Literpreis und Litermenge eingeben."); return;
         }
+        const tiRoh = tForm.tankinhalt.trim();
+        const kmRoh = tForm.km.trim();
+        if ((tiRoh === "") !== (kmRoh === "")) {
+          setFehler("Bitte Tankinhalt und gefahrene km beide ausfüllen oder beide leer lassen."); return;
+        }
+        let neuerVerbrauch = null, tankinhalt = null, km = null;
+        if (tiRoh !== "" && kmRoh !== "") {
+          tankinhalt = parseDE(tiRoh);
+          km = parseDE(kmRoh);
+          if (!isFinite(tankinhalt) || tankinhalt <= 0 || !isFinite(km) || km <= 0) {
+            setFehler("Bitte gültigen Tankinhalt und gültige gefahrene km eingeben."); return;
+          }
+          neuerVerbrauch = (tankinhalt / km) * 100;
+        }
         setFehler("");
+        const eintrag = { datum: tForm.datum, preis, liter, tankinhalt, km, verbrauch: neuerVerbrauch };
         if (bearbeiteTankungId) {
           speichern({
             ...state,
+            verbrauch: neuerVerbrauch != null ? neuerVerbrauch : state.verbrauch,
             tankungen: state.tankungen.map((t) =>
-              t.id === bearbeiteTankungId ? { ...t, datum: tForm.datum, preis, liter } : t
+              t.id === bearbeiteTankungId ? { ...t, ...eintrag } : t
             ),
           });
           setBearbeiteTankungId(null);
         } else {
-          speichern({ ...state, tankungen: [...state.tankungen, { id: uid(), datum: tForm.datum, preis, liter }] });
+          speichern({
+            ...state,
+            verbrauch: neuerVerbrauch != null ? neuerVerbrauch : state.verbrauch,
+            tankungen: [...state.tankungen, { id: uid(), ...eintrag }],
+          });
         }
-        setTForm({ datum: today(), preis: "", liter: "20" });
+        setTForm({ datum: today(), preis: "", liter: "20", tankinhalt: "", km: "" });
       };
 
       const tankungBearbeiten = (t) => {
         setBearbeiteTankungId(t.id);
-        setTForm({ datum: t.datum, preis: String(t.preis).replace(".", ","), liter: String(t.liter) });
+        setTForm({
+          datum: t.datum,
+          preis: String(t.preis).replace(".", ","),
+          liter: String(t.liter),
+          tankinhalt: t.tankinhalt != null ? String(t.tankinhalt).replace(".", ",") : "",
+          km: t.km != null ? String(t.km) : "",
+        });
       };
 
       const tankungBearbeitenAbbrechen = () => {
         setBearbeiteTankungId(null);
-        setTForm({ datum: today(), preis: "", liter: "20" });
+        setTForm({ datum: today(), preis: "", liter: "20", tankinhalt: "", km: "" });
       };
 
       const fahrtHinzufuegen = () => {
@@ -379,7 +415,7 @@
 
             {tab === "aktuell" && (
               <React.Fragment>
-                <Abschnitt titel="Tankung erfassen" hinweis="Großes Auto voll + Kanister. Nur der Kanister zählt auf die Rechnung.">
+                <Abschnitt titel="Tankung erfassen" hinweis="Großes Auto voll + Kanister. Aus Tankinhalt und gefahrenen km berechnet sich der Verbrauch automatisch.">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="col-span-2 min-w-0">
                       <Feld label="Datum">
@@ -392,7 +428,18 @@
                     <Feld label="Kanister l">
                       <input inputMode="decimal" className={inputCls} value={tForm.liter} onChange={(e) => setTForm({ ...tForm, liter: e.target.value })} />
                     </Feld>
+                    <Feld label="Tankinhalt großes Auto l">
+                      <input inputMode="decimal" placeholder="z. B. 48,3" className={inputCls} value={tForm.tankinhalt} onChange={(e) => setTForm({ ...tForm, tankinhalt: e.target.value })} />
+                    </Feld>
+                    <Feld label="Gefahrene km seit letzter Tankung">
+                      <input inputMode="numeric" placeholder="z. B. 620" className={inputCls} value={tForm.km} onChange={(e) => setTForm({ ...tForm, km: e.target.value })} />
+                    </Feld>
                   </div>
+                  <p className="mt-2 text-[12px] text-slate-500">
+                    {tVerbrauchVorschau
+                      ? `Berechneter Verbrauch: ${fmtNum(tVerbrauchVorschau)} l/100 km`
+                      : "Tankinhalt und km ausfüllen, um den Verbrauch automatisch zu berechnen (sonst bleibt der bisherige Verbrauch bestehen)."}
+                  </p>
                   <div className="mt-3 flex gap-2">
                     <button onClick={tankungHinzufuegen} className="flex-1 rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
                       {bearbeiteTankungId ? "Tankung aktualisieren" : "Tankung hinzufügen"}
@@ -407,7 +454,12 @@
                     <ul className="mt-3 divide-y divide-slate-100">
                       {state.tankungen.slice().reverse().map((t) => (
                         <li key={t.id} className={"flex items-center justify-between py-2 text-[14px]" + (bearbeiteTankungId === t.id ? " bg-amber-50 -mx-4 px-4" : "")}>
-                          <span className="text-slate-600">{fmtDate(t.datum)} · {fmtNum(t.liter, 0)} l × {fmtNum(t.preis, 3)} €</span>
+                          <span className="text-slate-600">
+                            {fmtDate(t.datum)} · {fmtNum(t.liter, 0)} l × {fmtNum(t.preis, 3)} €
+                            {t.verbrauch != null && (
+                              <span className="block text-[12px] text-slate-400">{fmtNum(t.tankinhalt)} l auf {fmtNum(t.km, 0)} km → {fmtNum(t.verbrauch)} l/100 km</span>
+                            )}
+                          </span>
                           <span className="flex items-center gap-3">
                             <span className="mono font-semibold">{fmtEUR(t.liter * t.preis)}</span>
                             <button onClick={() => tankungBearbeiten(t)} className="text-slate-400 hover:text-teal-700" aria-label="Tankung bearbeiten">✎</button>
@@ -467,8 +519,8 @@
             )}
 
             {tab === "einstellungen" && (
-              <Abschnitt titel="Großes Auto" hinweis="Der Verbrauch wird für die Kostenberechnung der Fahrten genutzt.">
-                <Feld label="Verbrauch l/100 km">
+              <Abschnitt titel="Großes Auto" hinweis="Der Verbrauch wird normalerweise automatisch bei jeder Tankung berechnet (Tankinhalt ÷ km × 100).">
+                <Feld label="Verbrauch l/100 km (manuelle Korrektur)">
                   <div className="flex gap-2">
                     <input inputMode="decimal" className={inputCls} value={verbrauchInput} onChange={(e) => setVerbrauchInput(e.target.value)} />
                     <button onClick={verbrauchSpeichern} className="rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold px-5 text-[14px] transition-colors">
