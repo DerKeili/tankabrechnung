@@ -47,6 +47,7 @@
     const parseDE = (s) => { if (typeof s === "number") return s; if (!s) return NaN; return parseFloat(String(s).replace(",", ".")); };
     const today = () => new Date().toISOString().slice(0, 10);
     const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const zeitJetzt = () => new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 
     const leererStand = { verbrauch: 7.5, aktuellerPreis: null, tankungen: [], fahrten: [], history: [] };
 
@@ -94,7 +95,7 @@
     function Feld({ label, children }) {
       return (
         <label className="block min-w-0">
-          <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">{label}</span>
+          <span className="flex items-end min-h-[2.1em] text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1 leading-tight">{label}</span>
           {children}
         </label>
       );
@@ -233,6 +234,7 @@
       }
 
       const calc = berechne(state);
+      const offeneFahrt = state.fahrten.find((f) => f.endKm == null) || null;
       const letzterPreis = state.tankungen.length
         ? state.tankungen[state.tankungen.length - 1].preis
         : state.aktuellerPreis;
@@ -316,7 +318,43 @@
         setTForm({ datum: today(), gesamt: "", liter: "20", gesamtbetrag: "", km: "" });
       };
 
-      const fahrtHinzufuegen = () => {
+      const fahrtStarten = () => {
+        const startKm = parseDE(fForm.startKm);
+        if (!isFinite(startKm) || startKm < 0) {
+          setFehler("Bitte gültige Anfangs-km eingeben."); return;
+        }
+        if (!isFinite(letzterPreis) || letzterPreis === null || letzterPreis <= 0) {
+          setFehler("Kein Literpreis vorhanden – bitte zuerst eine Tankung erfassen."); return;
+        }
+        setFehler("");
+        speichern({
+          ...state,
+          fahrten: [...state.fahrten, {
+            id: uid(), datum: fForm.datum, startKm, startZeit: zeitJetzt(),
+            endKm: null, endZeit: null, preis: letzterPreis,
+          }],
+        });
+        setFForm({ datum: today(), startKm: "", endKm: "" });
+      };
+
+      const fahrtBeenden = () => {
+        if (!offeneFahrt) return;
+        const endKmRoh = fForm.endKm.trim();
+        const endKm = parseDE(endKmRoh);
+        if (endKmRoh === "" || !isFinite(endKm) || endKm <= offeneFahrt.startKm) {
+          setFehler("Bitte gültige End-km (größer als Anfangs-km) eingeben."); return;
+        }
+        setFehler("");
+        speichern({
+          ...state,
+          fahrten: state.fahrten.map((f) =>
+            f.id === offeneFahrt.id ? { ...f, endKm, endZeit: zeitJetzt() } : f
+          ),
+        });
+        setFForm({ datum: today(), startKm: String(endKm), endKm: "" });
+      };
+
+      const fahrtBearbeitenSpeichern = () => {
         const startKm = parseDE(fForm.startKm);
         if (!isFinite(startKm) || startKm < 0) {
           setFehler("Bitte gültige Anfangs-km eingeben."); return;
@@ -329,24 +367,15 @@
             setFehler("End-km muss größer als Anfangs-km sein."); return;
           }
         }
-        if (bearbeiteFahrtId) {
-          setFehler("");
-          speichern({
-            ...state,
-            fahrten: state.fahrten.map((f) =>
-              f.id === bearbeiteFahrtId ? { ...f, datum: fForm.datum, startKm, endKm } : f
-            ),
-          });
-          setBearbeiteFahrtId(null);
-          setFForm({ datum: today(), startKm: endKm != null ? String(endKm) : fForm.startKm, endKm: "" });
-          return;
-        }
-        if (!isFinite(letzterPreis) || letzterPreis === null || letzterPreis <= 0) {
-          setFehler("Kein Literpreis vorhanden – bitte zuerst eine Tankung erfassen."); return;
-        }
         setFehler("");
-        speichern({ ...state, fahrten: [...state.fahrten, { id: uid(), datum: fForm.datum, startKm, endKm, preis: letzterPreis }] });
-        setFForm({ datum: today(), startKm: endKm != null ? String(endKm) : "", endKm: "" });
+        speichern({
+          ...state,
+          fahrten: state.fahrten.map((f) =>
+            f.id === bearbeiteFahrtId ? { ...f, datum: fForm.datum, startKm, endKm } : f
+          ),
+        });
+        setBearbeiteFahrtId(null);
+        setFForm({ datum: today(), startKm: endKm != null ? String(endKm) : fForm.startKm, endKm: "" });
       };
 
       const fahrtBearbeiten = (f) => {
@@ -471,7 +500,7 @@
                     <Feld label="Gesamtbetrag bezahlt €">
                       <input inputMode="decimal" placeholder="z. B. 108,50" className={inputCls} value={tForm.gesamtbetrag} onChange={(e) => setTForm({ ...tForm, gesamtbetrag: e.target.value })} />
                     </Feld>
-                    <Feld label="Gefahrene km seit letzter Tankung">
+                    <Feld label="Gefahrene km">
                       <input inputMode="numeric" placeholder="z. B. 620" className={inputCls} value={tForm.km} onChange={(e) => setTForm({ ...tForm, km: e.target.value })} />
                     </Feld>
                   </div>
@@ -515,43 +544,78 @@
                   )}
                 </Abschnitt>
 
-                <Abschnitt titel="Fahrt mit Roomi" hinweis="Anfangs- und Endkilometerstand eintragen. Der Preis der letzten Tankung wird automatisch übernommen.">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="col-span-2 min-w-0">
-                      <Feld label="Datum">
-                        <input type="date" className={dateInputCls} value={fForm.datum} onChange={(e) => setFForm({ ...fForm, datum: e.target.value })} />
-                      </Feld>
-                    </div>
-                    <Feld label="Anfangs-km">
-                      <input inputMode="numeric" placeholder="84250" className={inputCls} value={fForm.startKm} onChange={(e) => setFForm({ ...fForm, startKm: e.target.value })} />
-                    </Feld>
-                    <Feld label="End-km (optional, später ergänzbar)">
-                      <input inputMode="numeric" placeholder="84410" className={inputCls} value={fForm.endKm} onChange={(e) => setFForm({ ...fForm, endKm: e.target.value })} />
-                    </Feld>
-                  </div>
-                  <p className={"mt-2 text-[12px] " + (letzterPreis ? "text-slate-500" : "text-amber-600")}>
-                    {letzterPreis
-                      ? `Aktueller Preis: ${fmtNum(letzterPreis, 3)} €/l (aus letzter Tankung)`
-                      : "Noch kein Preis hinterlegt – zuerst eine Tankung erfassen."}
-                  </p>
-                  <div className="mt-3 flex gap-2">
-                    <button onClick={fahrtHinzufuegen} className="flex-1 rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
-                      {bearbeiteFahrtId ? "Fahrt aktualisieren" : "Fahrt hinzufügen"}
-                    </button>
-                    {bearbeiteFahrtId && (
-                      <button onClick={fahrtBearbeitenAbbrechen} className="rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-4 text-[14px] transition-colors">
-                        Abbrechen
+                <Abschnitt titel="Fahrt mit Roomi" hinweis="Erst Anfangs-km speichern, nach der Rückfahrt End-km ergänzen. Preis und Uhrzeit werden automatisch erfasst.">
+                  {bearbeiteFahrtId ? (
+                    <React.Fragment>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="col-span-2 min-w-0">
+                          <Feld label="Datum">
+                            <input type="date" className={dateInputCls} value={fForm.datum} onChange={(e) => setFForm({ ...fForm, datum: e.target.value })} />
+                          </Feld>
+                        </div>
+                        <Feld label="Anfangs-km">
+                          <input inputMode="numeric" placeholder="84250" className={inputCls} value={fForm.startKm} onChange={(e) => setFForm({ ...fForm, startKm: e.target.value })} />
+                        </Feld>
+                        <Feld label="End-km (optional)">
+                          <input inputMode="numeric" placeholder="84410" className={inputCls} value={fForm.endKm} onChange={(e) => setFForm({ ...fForm, endKm: e.target.value })} />
+                        </Feld>
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button onClick={fahrtBearbeitenSpeichern} className="flex-1 rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                          Fahrt aktualisieren
+                        </button>
+                        <button onClick={fahrtBearbeitenAbbrechen} className="rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-4 text-[14px] transition-colors">
+                          Abbrechen
+                        </button>
+                      </div>
+                    </React.Fragment>
+                  ) : offeneFahrt ? (
+                    <React.Fragment>
+                      <p className="text-[13px] text-slate-600">
+                        Unterwegs seit {fmtNum(offeneFahrt.startKm, 0)} km · {fmtDate(offeneFahrt.datum)}
+                        {offeneFahrt.startZeit ? `, ${offeneFahrt.startZeit} Uhr` : ""}
+                      </p>
+                      <div className="mt-2">
+                        <Feld label="End-km">
+                          <input inputMode="numeric" placeholder="84410" className={inputCls} value={fForm.endKm} onChange={(e) => setFForm({ ...fForm, endKm: e.target.value })} />
+                        </Feld>
+                      </div>
+                      <button onClick={fahrtBeenden} className="mt-3 w-full rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                        Fahrt beenden
                       </button>
-                    )}
-                  </div>
+                    </React.Fragment>
+                  ) : (
+                    <React.Fragment>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="col-span-2 min-w-0">
+                          <Feld label="Datum">
+                            <input type="date" className={dateInputCls} value={fForm.datum} onChange={(e) => setFForm({ ...fForm, datum: e.target.value })} />
+                          </Feld>
+                        </div>
+                        <div className="col-span-2 min-w-0">
+                          <Feld label="Anfangs-km">
+                            <input inputMode="numeric" placeholder="84250" className={inputCls} value={fForm.startKm} onChange={(e) => setFForm({ ...fForm, startKm: e.target.value })} />
+                          </Feld>
+                        </div>
+                      </div>
+                      <p className={"mt-2 text-[12px] " + (letzterPreis ? "text-slate-500" : "text-amber-600")}>
+                        {letzterPreis
+                          ? `Aktueller Preis: ${fmtNum(letzterPreis, 3)} €/l (aus letzter Tankung)`
+                          : "Noch kein Preis hinterlegt – zuerst eine Tankung erfassen."}
+                      </p>
+                      <button onClick={fahrtStarten} className="mt-3 w-full rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                        Fahrt starten
+                      </button>
+                    </React.Fragment>
+                  )}
                   {calc.fahrtDetails.length > 0 && (
                     <ul className="mt-3 divide-y divide-slate-100">
                       {calc.fahrtDetails.slice().reverse().map((f) => (
                         <li key={f.id} className={"flex items-center justify-between py-2 text-[14px]" + (bearbeiteFahrtId === f.id ? " bg-amber-50 -mx-4 px-4" : "")}>
                           <span className="text-slate-600">
                             {f.offen
-                              ? `${fmtDate(f.datum)} · unterwegs seit ${fmtNum(f.startKm, 0)} km`
-                              : `${fmtDate(f.datum)} · ${fmtNum(f.km, 0)} km · ${fmtNum(f.liter, 1)} l`}
+                              ? `${fmtDate(f.datum)}${f.startZeit ? ", " + f.startZeit : ""} · unterwegs seit ${fmtNum(f.startKm, 0)} km`
+                              : `${fmtDate(f.datum)} · ${fmtNum(f.km, 0)} km · ${fmtNum(f.liter, 1)} l${f.startZeit && f.endZeit ? ` · ${f.startZeit}–${f.endZeit}` : ""}`}
                           </span>
                           <span className="flex items-center gap-3">
                             {f.offen
