@@ -48,17 +48,20 @@
     const today = () => new Date().toISOString().slice(0, 10);
     const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-    const leererStand = { verbrauch: 7.5, tankungen: [], fahrten: [], history: [] };
+    const leererStand = { verbrauch: 7.5, aktuellerPreis: null, tankungen: [], fahrten: [], history: [] };
 
     function berechne(state) {
       const kanisterKosten = state.tankungen.reduce((s, t) => s + t.preis * t.liter, 0);
       const fahrtDetails = state.fahrten.map((f) => {
+        if (f.endKm == null) {
+          return { ...f, km: null, liter: null, kosten: 0, offen: true };
+        }
         const km = Math.max(0, f.endKm - f.startKm);
         const liter = (km / 100) * state.verbrauch;
-        return { ...f, km, liter, kosten: liter * f.preis };
+        return { ...f, km, liter, kosten: liter * f.preis, offen: false };
       });
-      const fahrtKosten = fahrtDetails.reduce((s, f) => s + f.kosten, 0);
-      const kmGesamt = fahrtDetails.reduce((s, f) => s + f.km, 0);
+      const fahrtKosten = fahrtDetails.reduce((s, f) => s + (f.kosten || 0), 0);
+      const kmGesamt = fahrtDetails.reduce((s, f) => s + (f.km || 0), 0);
       return { kanisterKosten, fahrtDetails, fahrtKosten, kmGesamt, gesamt: kanisterKosten + fahrtKosten };
     }
 
@@ -66,7 +69,16 @@
     async function ladeStand() {
       const { data, error } = await sb.from("abrechnung").select("data, updated_at").eq("id", 1).single();
       if (error) throw error;
-      return { stand: { ...leererStand, ...data.data }, updatedAt: data.updated_at };
+      const stand = { ...leererStand, ...data.data };
+      if (stand.aktuellerPreis == null) {
+        if (stand.tankungen.length > 0) {
+          stand.aktuellerPreis = stand.tankungen[stand.tankungen.length - 1].preis;
+        } else if (stand.history.length > 0 && stand.history[0].tankungen && stand.history[0].tankungen.length > 0) {
+          const letzteHist = stand.history[0].tankungen;
+          stand.aktuellerPreis = letzteHist[letzteHist.length - 1].preis;
+        }
+      }
+      return { stand, updatedAt: data.updated_at };
     }
     async function speichereStand(stand) {
       const { error } = await sb.from("abrechnung")
@@ -184,6 +196,7 @@
       useEffect(() => {
         if (!state || !state.fahrten.length) return;
         const letzte = state.fahrten[state.fahrten.length - 1];
+        if (letzte.endKm == null) return;
         setFForm((f) => (bearbeiteFahrtId ? f : { ...f, startKm: String(letzte.endKm) }));
       }, [state && state.fahrten]);
 
@@ -220,7 +233,9 @@
       }
 
       const calc = berechne(state);
-      const letzterPreis = state.tankungen.length ? state.tankungen[state.tankungen.length - 1].preis : null;
+      const letzterPreis = state.tankungen.length
+        ? state.tankungen[state.tankungen.length - 1].preis
+        : state.aktuellerPreis;
       const tVorschau = (() => {
         const gesamt = parseDE(tForm.gesamt);
         const kanister = parseDE(tForm.liter);
@@ -262,10 +277,13 @@
         const roomiListe = gesamt - liter;
         const neuerVerbrauch = km != null && roomiListe > 0 ? (roomiListe / km) * 100 : null;
         const eintrag = { datum: tForm.datum, preis, liter, gesamt, gesamtbetrag, km, verbrauch: neuerVerbrauch };
+        const istLetzte = !bearbeiteTankungId ||
+          (state.tankungen.length > 0 && state.tankungen[state.tankungen.length - 1].id === bearbeiteTankungId);
         if (bearbeiteTankungId) {
           speichern({
             ...state,
-            verbrauch: neuerVerbrauch != null ? neuerVerbrauch : state.verbrauch,
+            verbrauch: istLetzte && neuerVerbrauch != null ? neuerVerbrauch : state.verbrauch,
+            aktuellerPreis: istLetzte ? preis : state.aktuellerPreis,
             tankungen: state.tankungen.map((t) =>
               t.id === bearbeiteTankungId ? { ...t, ...eintrag } : t
             ),
@@ -275,6 +293,7 @@
           speichern({
             ...state,
             verbrauch: neuerVerbrauch != null ? neuerVerbrauch : state.verbrauch,
+            aktuellerPreis: preis,
             tankungen: [...state.tankungen, { id: uid(), ...eintrag }],
           });
         }
@@ -299,9 +318,16 @@
 
       const fahrtHinzufuegen = () => {
         const startKm = parseDE(fForm.startKm);
-        const endKm = parseDE(fForm.endKm);
-        if (!isFinite(startKm) || !isFinite(endKm) || endKm <= startKm) {
-          setFehler("End-km muss größer als Anfangs-km sein."); return;
+        if (!isFinite(startKm) || startKm < 0) {
+          setFehler("Bitte gültige Anfangs-km eingeben."); return;
+        }
+        const endKmRoh = fForm.endKm.trim();
+        let endKm = null;
+        if (endKmRoh !== "") {
+          endKm = parseDE(endKmRoh);
+          if (!isFinite(endKm) || endKm <= startKm) {
+            setFehler("End-km muss größer als Anfangs-km sein."); return;
+          }
         }
         if (bearbeiteFahrtId) {
           setFehler("");
@@ -312,7 +338,7 @@
             ),
           });
           setBearbeiteFahrtId(null);
-          setFForm({ datum: today(), startKm: String(endKm), endKm: "" });
+          setFForm({ datum: today(), startKm: endKm != null ? String(endKm) : fForm.startKm, endKm: "" });
           return;
         }
         if (!isFinite(letzterPreis) || letzterPreis === null || letzterPreis <= 0) {
@@ -320,18 +346,18 @@
         }
         setFehler("");
         speichern({ ...state, fahrten: [...state.fahrten, { id: uid(), datum: fForm.datum, startKm, endKm, preis: letzterPreis }] });
-        setFForm({ datum: today(), startKm: String(endKm), endKm: "" });
+        setFForm({ datum: today(), startKm: endKm != null ? String(endKm) : "", endKm: "" });
       };
 
       const fahrtBearbeiten = (f) => {
         setBearbeiteFahrtId(f.id);
-        setFForm({ datum: f.datum, startKm: String(f.startKm), endKm: String(f.endKm) });
+        setFForm({ datum: f.datum, startKm: String(f.startKm), endKm: f.endKm != null ? String(f.endKm) : "" });
       };
 
       const fahrtBearbeitenAbbrechen = () => {
         setBearbeiteFahrtId(null);
         const letzte = state.fahrten.length ? state.fahrten[state.fahrten.length - 1] : null;
-        setFForm({ datum: today(), startKm: letzte ? String(letzte.endKm) : "", endKm: "" });
+        setFForm({ datum: today(), startKm: letzte && letzte.endKm != null ? String(letzte.endKm) : "", endKm: "" });
       };
 
       const eintragLoeschen = (art, id) => {
@@ -350,15 +376,17 @@
       const alsBezahltMarkieren = () => {
         if (calc.gesamt <= 0) return;
         if (!window.confirm(`Gesamtbetrag ${fmtEUR(calc.gesamt)} als bezahlt markieren und neue Abrechnung starten?`)) return;
+        const offeneFahrten = state.fahrten.filter((f) => f.endKm == null);
+        const abgeschlosseneFahrten = state.fahrten.filter((f) => f.endKm != null);
         speichern({
           ...state,
           tankungen: [],
-          fahrten: [],
+          fahrten: offeneFahrten,
           history: [{
             id: uid(), bezahltAm: today(), gesamt: calc.gesamt,
             kanisterKosten: calc.kanisterKosten, fahrtKosten: calc.fahrtKosten,
             kmGesamt: calc.kmGesamt, verbrauch: state.verbrauch,
-            tankungen: state.tankungen, fahrten: state.fahrten,
+            tankungen: state.tankungen, fahrten: abgeschlosseneFahrten,
           }, ...state.history],
         });
         setTab("verlauf");
@@ -497,7 +525,7 @@
                     <Feld label="Anfangs-km">
                       <input inputMode="numeric" placeholder="84250" className={inputCls} value={fForm.startKm} onChange={(e) => setFForm({ ...fForm, startKm: e.target.value })} />
                     </Feld>
-                    <Feld label="End-km">
+                    <Feld label="End-km (optional, später ergänzbar)">
                       <input inputMode="numeric" placeholder="84410" className={inputCls} value={fForm.endKm} onChange={(e) => setFForm({ ...fForm, endKm: e.target.value })} />
                     </Feld>
                   </div>
@@ -520,9 +548,15 @@
                     <ul className="mt-3 divide-y divide-slate-100">
                       {calc.fahrtDetails.slice().reverse().map((f) => (
                         <li key={f.id} className={"flex items-center justify-between py-2 text-[14px]" + (bearbeiteFahrtId === f.id ? " bg-amber-50 -mx-4 px-4" : "")}>
-                          <span className="text-slate-600">{fmtDate(f.datum)} · {fmtNum(f.km, 0)} km · {fmtNum(f.liter, 1)} l</span>
+                          <span className="text-slate-600">
+                            {f.offen
+                              ? `${fmtDate(f.datum)} · unterwegs seit ${fmtNum(f.startKm, 0)} km`
+                              : `${fmtDate(f.datum)} · ${fmtNum(f.km, 0)} km · ${fmtNum(f.liter, 1)} l`}
+                          </span>
                           <span className="flex items-center gap-3">
-                            <span className="mono font-semibold">{fmtEUR(f.kosten)}</span>
+                            {f.offen
+                              ? <span className="text-[12px] font-semibold text-amber-600">offen</span>
+                              : <span className="mono font-semibold">{fmtEUR(f.kosten)}</span>}
                             <button onClick={() => fahrtBearbeiten(f)} className="text-slate-400 hover:text-teal-700" aria-label="Fahrt bearbeiten">✎</button>
                             <button onClick={() => eintragLoeschen("fahrten", f.id)} className="text-slate-400 hover:text-red-600" aria-label="Fahrt löschen">✕</button>
                           </span>
