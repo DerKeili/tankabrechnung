@@ -49,21 +49,35 @@
     const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const zeitJetzt = () => new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 
-    const leererStand = { verbrauch: 7.5, aktuellerPreis: null, tankungen: [], fahrten: [], history: [] };
+    const leererStand = {
+      verbrauch: 7.5, aktuellerPreis: null, helgaVerbrauch: null,
+      tankungen: [], fahrten: [], helgaFahrten: [], history: [],
+    };
 
-    function berechne(state) {
-      const kanisterKosten = state.tankungen.reduce((s, t) => s + t.preis * t.liter, 0);
-      const fahrtDetails = state.fahrten.map((f) => {
+    function mapFahrten(liste, verbrauch) {
+      return liste.map((f) => {
         if (f.endKm == null) {
           return { ...f, km: null, liter: null, kosten: 0, offen: true };
         }
         const km = Math.max(0, f.endKm - f.startKm);
-        const liter = (km / 100) * state.verbrauch;
+        const liter = (km / 100) * (verbrauch || 0);
         return { ...f, km, liter, kosten: liter * f.preis, offen: false };
       });
+    }
+
+    function berechne(state) {
+      const kanisterKosten = state.tankungen.reduce((s, t) => s + t.preis * t.liter, 0);
+      const fahrtDetails = mapFahrten(state.fahrten, state.verbrauch);
       const fahrtKosten = fahrtDetails.reduce((s, f) => s + (f.kosten || 0), 0);
       const kmGesamt = fahrtDetails.reduce((s, f) => s + (f.km || 0), 0);
-      return { kanisterKosten, fahrtDetails, fahrtKosten, kmGesamt, gesamt: kanisterKosten + fahrtKosten };
+      const helgaDetails = mapFahrten(state.helgaFahrten || [], state.helgaVerbrauch);
+      const helgaKosten = helgaDetails.reduce((s, f) => s + (f.kosten || 0), 0);
+      const helgaKmGesamt = helgaDetails.reduce((s, f) => s + (f.km || 0), 0);
+      return {
+        kanisterKosten, fahrtDetails, fahrtKosten, kmGesamt,
+        helgaDetails, helgaKosten, helgaKmGesamt,
+        gesamt: kanisterKosten + fahrtKosten - helgaKosten,
+      };
     }
 
     // ---------- Datenbank ----------
@@ -163,9 +177,12 @@
 
       const [tForm, setTForm] = useState({ datum: today(), gesamt: "", liter: "20", gesamtbetrag: "", km: "" });
       const [fForm, setFForm] = useState({ datum: today(), startKm: "", endKm: "" });
+      const [hForm, setHForm] = useState({ datum: today(), startKm: "", endKm: "" });
       const [bearbeiteTankungId, setBearbeiteTankungId] = useState(null);
       const [bearbeiteFahrtId, setBearbeiteFahrtId] = useState(null);
+      const [bearbeiteHelgaFahrtId, setBearbeiteHelgaFahrtId] = useState(null);
       const [verbrauchInput, setVerbrauchInput] = useState("");
+      const [helgaVerbrauchInput, setHelgaVerbrauchInput] = useState("");
 
       useEffect(() => {
         sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -195,11 +212,22 @@
       }, [state && state.verbrauch]);
 
       useEffect(() => {
+        if (state) setHelgaVerbrauchInput(state.helgaVerbrauch != null ? String(state.helgaVerbrauch).replace(".", ",") : "");
+      }, [state && state.helgaVerbrauch]);
+
+      useEffect(() => {
         if (!state || !state.fahrten.length) return;
         const letzte = state.fahrten[state.fahrten.length - 1];
         if (letzte.endKm == null) return;
         setFForm((f) => (bearbeiteFahrtId ? f : { ...f, startKm: String(letzte.endKm) }));
       }, [state && state.fahrten]);
+
+      useEffect(() => {
+        if (!state || !state.helgaFahrten || !state.helgaFahrten.length) return;
+        const letzte = state.helgaFahrten[state.helgaFahrten.length - 1];
+        if (letzte.endKm == null) return;
+        setHForm((h) => (bearbeiteHelgaFahrtId ? h : { ...h, startKm: String(letzte.endKm) }));
+      }, [state && state.helgaFahrten]);
 
       const speichern = async (neu) => {
         setState(neu);
@@ -235,6 +263,7 @@
 
       const calc = berechne(state);
       const offeneFahrt = state.fahrten.find((f) => f.endKm == null) || null;
+      const offeneHelgaFahrt = (state.helgaFahrten || []).find((f) => f.endKm == null) || null;
       const letzterPreis = state.tankungen.length
         ? state.tankungen[state.tankungen.length - 1].preis
         : state.aktuellerPreis;
@@ -389,9 +418,91 @@
         setFForm({ datum: today(), startKm: letzte && letzte.endKm != null ? String(letzte.endKm) : "", endKm: "" });
       };
 
+      const helgaFahrtStarten = () => {
+        const startKm = parseDE(hForm.startKm);
+        if (!isFinite(startKm) || startKm < 0) {
+          setFehler("Bitte gültige Anfangs-km eingeben."); return;
+        }
+        if (!isFinite(letzterPreis) || letzterPreis === null || letzterPreis <= 0) {
+          setFehler("Kein Literpreis vorhanden – bitte zuerst eine Tankung erfassen."); return;
+        }
+        if (!isFinite(state.helgaVerbrauch) || state.helgaVerbrauch === null || state.helgaVerbrauch <= 0) {
+          setFehler("Kein Verbrauch für Helga hinterlegt – bitte zuerst unter „Fahrzeuge“ eintragen."); return;
+        }
+        setFehler("");
+        speichern({
+          ...state,
+          helgaFahrten: [...(state.helgaFahrten || []), {
+            id: uid(), datum: hForm.datum, startKm, startZeit: zeitJetzt(),
+            endKm: null, endZeit: null, preis: letzterPreis,
+          }],
+        });
+        setHForm({ datum: today(), startKm: "", endKm: "" });
+      };
+
+      const helgaFahrtBeenden = () => {
+        if (!offeneHelgaFahrt) return;
+        const endKmRoh = hForm.endKm.trim();
+        const endKm = parseDE(endKmRoh);
+        if (endKmRoh === "" || !isFinite(endKm) || endKm <= offeneHelgaFahrt.startKm) {
+          setFehler("Bitte gültige End-km (größer als Anfangs-km) eingeben."); return;
+        }
+        setFehler("");
+        speichern({
+          ...state,
+          helgaFahrten: state.helgaFahrten.map((f) =>
+            f.id === offeneHelgaFahrt.id ? { ...f, endKm, endZeit: zeitJetzt() } : f
+          ),
+        });
+        setHForm({ datum: today(), startKm: String(endKm), endKm: "" });
+      };
+
+      const helgaFahrtBearbeitenSpeichern = () => {
+        const startKm = parseDE(hForm.startKm);
+        if (!isFinite(startKm) || startKm < 0) {
+          setFehler("Bitte gültige Anfangs-km eingeben."); return;
+        }
+        const endKmRoh = hForm.endKm.trim();
+        let endKm = null;
+        if (endKmRoh !== "") {
+          endKm = parseDE(endKmRoh);
+          if (!isFinite(endKm) || endKm <= startKm) {
+            setFehler("End-km muss größer als Anfangs-km sein."); return;
+          }
+        }
+        setFehler("");
+        speichern({
+          ...state,
+          helgaFahrten: state.helgaFahrten.map((f) =>
+            f.id === bearbeiteHelgaFahrtId ? { ...f, datum: hForm.datum, startKm, endKm } : f
+          ),
+        });
+        setBearbeiteHelgaFahrtId(null);
+        setHForm({ datum: today(), startKm: endKm != null ? String(endKm) : hForm.startKm, endKm: "" });
+      };
+
+      const helgaFahrtBearbeiten = (f) => {
+        setBearbeiteHelgaFahrtId(f.id);
+        setHForm({ datum: f.datum, startKm: String(f.startKm), endKm: f.endKm != null ? String(f.endKm) : "" });
+      };
+
+      const helgaFahrtBearbeitenAbbrechen = () => {
+        setBearbeiteHelgaFahrtId(null);
+        const letzte = state.helgaFahrten && state.helgaFahrten.length ? state.helgaFahrten[state.helgaFahrten.length - 1] : null;
+        setHForm({ datum: today(), startKm: letzte && letzte.endKm != null ? String(letzte.endKm) : "", endKm: "" });
+      };
+
+      const helgaVerbrauchSpeichern = () => {
+        const v = parseDE(helgaVerbrauchInput);
+        if (!isFinite(v) || v <= 0) { setFehler("Bitte gültigen Verbrauch eingeben."); return; }
+        setFehler("");
+        speichern({ ...state, helgaVerbrauch: v });
+      };
+
       const eintragLoeschen = (art, id) => {
         if (art === "tankungen" && bearbeiteTankungId === id) tankungBearbeitenAbbrechen();
         if (art === "fahrten" && bearbeiteFahrtId === id) fahrtBearbeitenAbbrechen();
+        if (art === "helgaFahrten" && bearbeiteHelgaFahrtId === id) helgaFahrtBearbeitenAbbrechen();
         speichern({ ...state, [art]: state[art].filter((e) => e.id !== id) });
       };
 
@@ -407,15 +518,19 @@
         if (!window.confirm(`Gesamtbetrag ${fmtEUR(calc.gesamt)} als bezahlt markieren und neue Abrechnung starten?`)) return;
         const offeneFahrten = state.fahrten.filter((f) => f.endKm == null);
         const abgeschlosseneFahrten = state.fahrten.filter((f) => f.endKm != null);
+        const offeneHelga = (state.helgaFahrten || []).filter((f) => f.endKm == null);
+        const abgeschlosseneHelga = (state.helgaFahrten || []).filter((f) => f.endKm != null);
         speichern({
           ...state,
           tankungen: [],
           fahrten: offeneFahrten,
+          helgaFahrten: offeneHelga,
           history: [{
             id: uid(), bezahltAm: today(), gesamt: calc.gesamt,
             kanisterKosten: calc.kanisterKosten, fahrtKosten: calc.fahrtKosten,
             kmGesamt: calc.kmGesamt, verbrauch: state.verbrauch,
-            tankungen: state.tankungen, fahrten: abgeschlosseneFahrten,
+            helgaKosten: calc.helgaKosten, helgaKmGesamt: calc.helgaKmGesamt, helgaVerbrauch: state.helgaVerbrauch,
+            tankungen: state.tankungen, fahrten: abgeschlosseneFahrten, helgaFahrten: abgeschlosseneHelga,
           }, ...state.history],
         });
         setTab("verlauf");
@@ -455,8 +570,14 @@
                     <span className="text-slate-600">Fahrt mit Roomi ({fmtNum(calc.kmGesamt, 0)} km)</span>
                     <span className="mono font-semibold">{fmtEUR(calc.fahrtKosten)}</span>
                   </div>
+                  {(calc.helgaKosten > 0 || (state.helgaFahrten && state.helgaFahrten.length > 0)) && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-600">Fahrt mit Helga ({fmtNum(calc.helgaKmGesamt, 0)} km, gegengerechnet)</span>
+                      <span className="mono font-semibold">− {fmtEUR(calc.helgaKosten)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-[12px] text-slate-400">
-                    <span>Verbrauch: {fmtNum(state.verbrauch)} l/100 km</span>
+                    <span>Roomi: {fmtNum(state.verbrauch)} l/100 km{state.helgaVerbrauch ? ` · Helga: ${fmtNum(state.helgaVerbrauch)} l/100 km` : ""}</span>
                     {letzterPreis && <span>zuletzt {fmtNum(letzterPreis, 3)} €/l</span>}
                   </div>
                 </div>
@@ -473,7 +594,7 @@
             )}
 
             <nav className="flex gap-1 bg-slate-200 rounded-xl p-1">
-              {[["aktuell", "Erfassen"], ["verlauf", `Verlauf (${state.history.length})`], ["einstellungen", "Auto"]].map(([key, label]) => (
+              {[["aktuell", "Erfassen"], ["verlauf", `Verlauf (${state.history.length})`], ["einstellungen", "Fahrzeuge"]].map(([key, label]) => (
                 <button key={key} onClick={() => setTab(key)}
                   className={"flex-1 rounded-lg py-2 text-[14px] font-semibold transition-colors " +
                     (tab === key ? "bg-white text-teal-900 shadow-sm" : "text-slate-600")}>
@@ -629,23 +750,127 @@
                     </ul>
                   )}
                 </Abschnitt>
+
+                <Abschnitt titel="Fahrt mit Helga" hinweis="Wenn du mit Helga fährst, weil Roomi bei deiner Frau ist. Die Kosten werden von der Rechnung abgezogen.">
+                  {bearbeiteHelgaFahrtId ? (
+                    <React.Fragment>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="col-span-2 min-w-0">
+                          <Feld label="Datum">
+                            <input type="date" className={dateInputCls} value={hForm.datum} onChange={(e) => setHForm({ ...hForm, datum: e.target.value })} />
+                          </Feld>
+                        </div>
+                        <Feld label="Anfangs-km">
+                          <input inputMode="numeric" placeholder="51200" className={inputCls} value={hForm.startKm} onChange={(e) => setHForm({ ...hForm, startKm: e.target.value })} />
+                        </Feld>
+                        <Feld label="End-km (optional)">
+                          <input inputMode="numeric" placeholder="51260" className={inputCls} value={hForm.endKm} onChange={(e) => setHForm({ ...hForm, endKm: e.target.value })} />
+                        </Feld>
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button onClick={helgaFahrtBearbeitenSpeichern} className="flex-1 rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                          Fahrt aktualisieren
+                        </button>
+                        <button onClick={helgaFahrtBearbeitenAbbrechen} className="rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-4 text-[14px] transition-colors">
+                          Abbrechen
+                        </button>
+                      </div>
+                    </React.Fragment>
+                  ) : offeneHelgaFahrt ? (
+                    <React.Fragment>
+                      <p className="text-[13px] text-slate-600">
+                        Unterwegs seit {fmtNum(offeneHelgaFahrt.startKm, 0)} km · {fmtDate(offeneHelgaFahrt.datum)}
+                        {offeneHelgaFahrt.startZeit ? `, ${offeneHelgaFahrt.startZeit} Uhr` : ""}
+                      </p>
+                      <div className="mt-2">
+                        <Feld label="End-km">
+                          <input inputMode="numeric" placeholder="51260" className={inputCls} value={hForm.endKm} onChange={(e) => setHForm({ ...hForm, endKm: e.target.value })} />
+                        </Feld>
+                      </div>
+                      <button onClick={helgaFahrtBeenden} className="mt-3 w-full rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                        Fahrt beenden
+                      </button>
+                    </React.Fragment>
+                  ) : (
+                    <React.Fragment>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="col-span-2 min-w-0">
+                          <Feld label="Datum">
+                            <input type="date" className={dateInputCls} value={hForm.datum} onChange={(e) => setHForm({ ...hForm, datum: e.target.value })} />
+                          </Feld>
+                        </div>
+                        <div className="col-span-2 min-w-0">
+                          <Feld label="Anfangs-km">
+                            <input inputMode="numeric" placeholder="51200" className={inputCls} value={hForm.startKm} onChange={(e) => setHForm({ ...hForm, startKm: e.target.value })} />
+                          </Feld>
+                        </div>
+                      </div>
+                      <p className={"mt-2 text-[12px] " + (letzterPreis && state.helgaVerbrauch ? "text-slate-500" : "text-amber-600")}>
+                        {!letzterPreis
+                          ? "Noch kein Preis hinterlegt – zuerst eine Tankung erfassen."
+                          : !state.helgaVerbrauch
+                          ? "Kein Verbrauch für Helga hinterlegt – unter „Fahrzeuge“ eintragen."
+                          : `Aktueller Preis: ${fmtNum(letzterPreis, 3)} €/l · Helga-Verbrauch: ${fmtNum(state.helgaVerbrauch)} l/100 km`}
+                      </p>
+                      <button onClick={helgaFahrtStarten} className="mt-3 w-full rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold py-2.5 text-[14px] transition-colors">
+                        Fahrt starten
+                      </button>
+                    </React.Fragment>
+                  )}
+                  {calc.helgaDetails.length > 0 && (
+                    <ul className="mt-3 divide-y divide-slate-100">
+                      {calc.helgaDetails.slice().reverse().map((f) => (
+                        <li key={f.id} className={"flex items-center justify-between py-2 text-[14px]" + (bearbeiteHelgaFahrtId === f.id ? " bg-amber-50 -mx-4 px-4" : "")}>
+                          <span className="text-slate-600">
+                            {f.offen
+                              ? `${fmtDate(f.datum)}${f.startZeit ? ", " + f.startZeit : ""} · unterwegs seit ${fmtNum(f.startKm, 0)} km`
+                              : `${fmtDate(f.datum)} · ${fmtNum(f.km, 0)} km · ${fmtNum(f.liter, 1)} l${f.startZeit && f.endZeit ? ` · ${f.startZeit}–${f.endZeit}` : ""}`}
+                          </span>
+                          <span className="flex items-center gap-3">
+                            {f.offen
+                              ? <span className="text-[12px] font-semibold text-amber-600">offen</span>
+                              : <span className="mono font-semibold">− {fmtEUR(f.kosten)}</span>}
+                            <button onClick={() => helgaFahrtBearbeiten(f)} className="text-slate-400 hover:text-teal-700" aria-label="Fahrt bearbeiten">✎</button>
+                            <button onClick={() => eintragLoeschen("helgaFahrten", f.id)} className="text-slate-400 hover:text-red-600" aria-label="Fahrt löschen">✕</button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Abschnitt>
               </React.Fragment>
             )}
 
             {tab === "einstellungen" && (
-              <Abschnitt titel="Großes Auto" hinweis="Der Verbrauch wird normalerweise automatisch bei jeder Tankung berechnet (Tankinhalt ÷ km × 100).">
-                <Feld label="Verbrauch l/100 km (manuelle Korrektur)">
-                  <div className="flex gap-2">
-                    <input inputMode="decimal" className={inputCls} value={verbrauchInput} onChange={(e) => setVerbrauchInput(e.target.value)} />
-                    <button onClick={verbrauchSpeichern} className="rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold px-5 text-[14px] transition-colors">
-                      Speichern
-                    </button>
-                  </div>
-                </Feld>
-                <p className="text-[13px] text-slate-500 mt-3">
-                  Formel: km × Verbrauch ÷ 100 × Literpreis. Der Kanister wird 1:1 zum Tankpreis berechnet.
-                </p>
-              </Abschnitt>
+              <React.Fragment>
+                <Abschnitt titel="Roomi (großes Auto)" hinweis="Der Verbrauch wird normalerweise automatisch bei jeder Tankung berechnet (Tankinhalt ÷ km × 100).">
+                  <Feld label="Verbrauch l/100 km (manuelle Korrektur)">
+                    <div className="flex gap-2">
+                      <input inputMode="decimal" className={inputCls} value={verbrauchInput} onChange={(e) => setVerbrauchInput(e.target.value)} />
+                      <button onClick={verbrauchSpeichern} className="rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold px-5 text-[14px] transition-colors">
+                        Speichern
+                      </button>
+                    </div>
+                  </Feld>
+                  <p className="text-[13px] text-slate-500 mt-3">
+                    Formel: km × Verbrauch ÷ 100 × Literpreis. Der Kanister wird 1:1 zum Tankpreis berechnet.
+                  </p>
+                </Abschnitt>
+
+                <Abschnitt titel="Helga (Auto deiner Frau)" hinweis="Verbrauch wird nicht automatisch berechnet, sondern hier manuell eingetragen.">
+                  <Feld label="Verbrauch l/100 km">
+                    <div className="flex gap-2">
+                      <input inputMode="decimal" placeholder="z. B. 6,0" className={inputCls} value={helgaVerbrauchInput} onChange={(e) => setHelgaVerbrauchInput(e.target.value)} />
+                      <button onClick={helgaVerbrauchSpeichern} className="rounded-xl bg-teal-800 hover:bg-teal-700 text-white font-semibold px-5 text-[14px] transition-colors">
+                        Speichern
+                      </button>
+                    </div>
+                  </Feld>
+                  <p className="text-[13px] text-slate-500 mt-3">
+                    Fährst du mit Helga (z. B. weil Roomi bei deiner Frau ist), werden die Kosten dieser Fahrten von der Rechnung abgezogen statt addiert.
+                  </p>
+                </Abschnitt>
+              </React.Fragment>
             )}
 
             {tab === "verlauf" && (
@@ -660,7 +885,8 @@
                           <span className="mono font-bold text-teal-900 text-[16px]">{fmtEUR(h.gesamt)}</span>
                         </div>
                         <p className="text-[13px] text-slate-500 mt-0.5">
-                          Kanister {fmtEUR(h.kanisterKosten)} · Fahrten {fmtEUR(h.fahrtKosten)} ({fmtNum(h.kmGesamt, 0)} km) · {fmtNum(h.verbrauch)} l/100 km
+                          Kanister {fmtEUR(h.kanisterKosten)} · Roomi {fmtEUR(h.fahrtKosten)} ({fmtNum(h.kmGesamt, 0)} km, {fmtNum(h.verbrauch)} l/100 km)
+                          {h.helgaKosten > 0 && <> · Helga − {fmtEUR(h.helgaKosten)} ({fmtNum(h.helgaKmGesamt, 0)} km)</>}
                         </p>
                       </li>
                     ))}
