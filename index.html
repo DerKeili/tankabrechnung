@@ -946,6 +946,10 @@
                   <Feld label="E10 Deutschland (Kamenz) €/l">
                     <input inputMode="decimal" placeholder="z. B. 1,679" className={inputCls} value={vForm.dePreis} onChange={(e) => setVForm({ ...vForm, dePreis: e.target.value })} />
                   </Feld>
+                  <a href="https://www.tankpreise.de/tankstellen/super-e10/in/kamenz" target="_blank" rel="noopener noreferrer"
+                    className="mt-1 inline-block text-[12px] text-teal-700 underline">
+                    Live-Preise Kamenz öffnen ↗
+                  </a>
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     <Feld label="Zu tankende Menge l">
                       <input inputMode="decimal" placeholder="z. B. 68" className={inputCls} value={vForm.menge} onChange={(e) => setVForm({ ...vForm, menge: e.target.value })} />
@@ -963,6 +967,10 @@
                 </Abschnitt>
 
                 <Abschnitt titel="Tschechien" hinweis="Pb95-Preis in CZK/l, wie auf der Tankstellen-Karte angezeigt.">
+                  <a href="https://www.czech-tourist.de/benzinpreise.htm" target="_blank" rel="noopener noreferrer"
+                    className="inline-block mb-2 text-[12px] text-teal-700 underline">
+                    Tagespreis Tschechien öffnen ↗
+                  </a>
                   <div className="grid grid-cols-2 gap-2">
                     <Feld label="Preis Pb95 CZK/l">
                       <input inputMode="decimal" placeholder="z. B. 32,90" className={inputCls} value={vForm.czPreis} onChange={(e) => setVForm({ ...vForm, czPreis: e.target.value })} />
@@ -992,6 +1000,10 @@
                 </Abschnitt>
 
                 <Abschnitt titel="Polen" hinweis="Pb95-Preis in PLN/l, wie auf der Tankstellen-Karte angezeigt.">
+                  <a href="https://tankradar.io/de/prices/poland" target="_blank" rel="noopener noreferrer"
+                    className="inline-block mb-2 text-[12px] text-teal-700 underline">
+                    Tagespreis Polen öffnen ↗
+                  </a>
                   <div className="grid grid-cols-2 gap-2">
                     <Feld label="Preis Pb95 PLN/l">
                       <input inputMode="decimal" placeholder="z. B. 6,50" className={inputCls} value={vForm.plPreis} onChange={(e) => setVForm({ ...vForm, plPreis: e.target.value })} />
