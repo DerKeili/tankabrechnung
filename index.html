@@ -84,6 +84,32 @@
       };
     }
 
+    // Baut aus allen Tankungen (aktuelle Periode + kompletter Verlauf) eine nach Datum
+    // sortierte Zeitlinie der Verbrauchswerte, um rückwirkend ermitteln zu können,
+    // welcher Verbrauch an einem bestimmten Fahrt-Datum tatsächlich gültig war.
+    function baueVerbrauchZeitlinie(stand) {
+      const punkte = [];
+      (stand.tankungen || []).forEach((t) => {
+        if (t.verbrauch != null) punkte.push({ datum: t.datum, verbrauch: t.verbrauch });
+      });
+      (stand.history || []).forEach((h) => {
+        (h.tankungen || []).forEach((t) => {
+          if (t.verbrauch != null) punkte.push({ datum: t.datum, verbrauch: t.verbrauch });
+        });
+      });
+      punkte.sort((a, b) => (a.datum < b.datum ? -1 : a.datum > b.datum ? 1 : 0));
+      return punkte;
+    }
+
+    function verbrauchAmDatum(zeitlinie, datum, fallback) {
+      let ergebnis = fallback;
+      for (const p of zeitlinie) {
+        if (p.datum <= datum) ergebnis = p.verbrauch;
+        else break;
+      }
+      return ergebnis;
+    }
+
     // ---------- Datenbank ----------
     async function ladeStand() {
       const { data, error } = await sb.from("abrechnung").select("data, updated_at").eq("id", 1).single();
@@ -96,6 +122,16 @@
           const letzteHist = stand.history[0].tankungen;
           stand.aktuellerPreis = letzteHist[letzteHist.length - 1].preis;
         }
+      }
+      // Ältere Roomi-Fahrten, die noch vor der Verbrauchs-Sperre angelegt wurden,
+      // bekommen hier einmalig den historisch korrekten Verbrauch nachgetragen,
+      // statt (fälschlich) den aktuellen Verbrauch zu übernehmen.
+      const zeitlinie = baueVerbrauchZeitlinie(stand);
+      if (zeitlinie.length > 0 && stand.fahrten && stand.fahrten.length > 0) {
+        stand.fahrten = stand.fahrten.map((f) => {
+          if (f.verbrauch != null) return f;
+          return { ...f, verbrauch: verbrauchAmDatum(zeitlinie, f.datum, leererStand.verbrauch), verbrauchRekonstruiert: true };
+        });
       }
       return { stand, updatedAt: data.updated_at };
     }
@@ -796,7 +832,7 @@
                               : `${fmtDate(f.datum)} · ${fmtNum(f.km, 0)} km · ${fmtNum(f.liter, 1)} l${f.startZeit && f.endZeit ? ` · ${f.startZeit}–${f.endZeit}` : ""}`}
                             {!f.offen && (
                               <span className="block text-[12px] text-slate-400">
-                                berechnet mit {fmtNum(f.verwendeterVerbrauch)} l/100 km · {fmtNum(f.preis, 3)} €/l
+                                berechnet mit {fmtNum(f.verwendeterVerbrauch)} l/100 km · {fmtNum(f.preis, 3)} €/l{f.verbrauchRekonstruiert ? " (rekonstruiert)" : ""}
                               </span>
                             )}
                           </span>
