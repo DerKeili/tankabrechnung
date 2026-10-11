@@ -223,7 +223,7 @@
       const [bearbeiteHelgaFahrtId, setBearbeiteHelgaFahrtId] = useState(null);
       const [verbrauchInput, setVerbrauchInput] = useState("");
       const [helgaVerbrauchInput, setHelgaVerbrauchInput] = useState("");
-      const [vForm, setVForm] = useState({ dePreis: "", czPreis: "", czKurs: "", plPreis: "", plKurs: "", kmCZ: "", kmPL: "", menge: "" });
+      const [vForm, setVForm] = useState({ dePreis: "", czPreis: "", czKurs: "", plPreis: "", plKurs: "", kmCZ: "64", kmPL: "144", menge: "" });
       const [kursStatus, setKursStatus] = useState("");
 
       useEffect(() => {
@@ -1020,6 +1020,10 @@
                       </Feld>
                     </div>
                   </div>
+                  <a href="https://www.finanzen.net/devisen/euro-tschechische_krone-kurs" target="_blank" rel="noopener noreferrer"
+                    className="inline-block mt-1 text-[12px] text-teal-700 underline">
+                    Kurs manuell gegenchecken ↗
+                  </a>
                   {vergleich && vergleich.cz && (
                     <div className={"mt-3 rounded-xl p-3 text-[14px] " + (vergleich.cz.netto > 0 ? "bg-emerald-50 text-emerald-900" : "bg-red-50 text-red-900")}>
                       <div className="flex justify-between font-bold">
@@ -1036,9 +1040,9 @@
                 </Abschnitt>
 
                 <Abschnitt titel="Polen" hinweis="Pb95-Preis in PLN/l, wie auf der Tankstellen-Karte angezeigt.">
-                  <a href="https://tankradar.io/de/prices/poland" target="_blank" rel="noopener noreferrer"
+                  <a href="https://tankradar.io/de/prices/zgorzelec" target="_blank" rel="noopener noreferrer"
                     className="inline-block mb-2 text-[12px] text-teal-700 underline">
-                    Tagespreis Polen öffnen ↗
+                    Tagespreis Zgorzelec öffnen ↗
                   </a>
                   <div className="grid grid-cols-2 gap-2">
                     <Feld label="Preis Pb95 PLN/l">
@@ -1053,6 +1057,10 @@
                       </Feld>
                     </div>
                   </div>
+                  <a href="https://www.finanzen.net/devisen/euro-zloty-kurs" target="_blank" rel="noopener noreferrer"
+                    className="inline-block mt-1 text-[12px] text-teal-700 underline">
+                    Kurs manuell gegenchecken ↗
+                  </a>
                   {vergleich && vergleich.pl && (
                     <div className={"mt-3 rounded-xl p-3 text-[14px] " + (vergleich.pl.netto > 0 ? "bg-emerald-50 text-emerald-900" : "bg-red-50 text-red-900")}>
                       <div className="flex justify-between font-bold">
