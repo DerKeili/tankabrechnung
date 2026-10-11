@@ -223,7 +223,7 @@
       const [bearbeiteHelgaFahrtId, setBearbeiteHelgaFahrtId] = useState(null);
       const [verbrauchInput, setVerbrauchInput] = useState("");
       const [helgaVerbrauchInput, setHelgaVerbrauchInput] = useState("");
-      const [vForm, setVForm] = useState({ dePreis: "", czPreis: "", czKurs: "", plPreis: "", plKurs: "", kmCZ: "64", kmPL: "144", menge: "" });
+      const [vForm, setVForm] = useState({ dePreis: "", czPreis: "", czKurs: "", plPreis: "", plKurs: "", kmCZ: "64", kmPL: "144" });
       const [kursStatus, setKursStatus] = useState("");
 
       useEffect(() => {
@@ -275,25 +275,36 @@
         setKursStatus("Lade Wechselkurse …");
         try {
           const res = await fetch("https://api.frankfurter.app/latest?from=EUR&to=CZK,PLN");
+          if (!res.ok) throw new Error("frankfurter.app nicht erreichbar");
           const data = await res.json();
+          if (!data.rates || !data.rates.CZK || !data.rates.PLN) throw new Error("Unerwartete Antwort");
           setVForm((v) => ({
             ...v,
             czKurs: String(data.rates.CZK).replace(".", ","),
             plKurs: String(data.rates.PLN).replace(".", ","),
           }));
           setKursStatus(`Kurse vom ${data.date} (1 € = X CZK/PLN)`);
+          return;
         } catch (e) {
+          // erste Quelle fehlgeschlagen – zweite, unabhängige Quelle versuchen
+        }
+        try {
+          const res2 = await fetch("https://open.er-api.com/v6/latest/EUR");
+          if (!res2.ok) throw new Error("open.er-api.com nicht erreichbar");
+          const data2 = await res2.json();
+          if (!data2.rates || !data2.rates.CZK || !data2.rates.PLN) throw new Error("Unerwartete Antwort");
+          setVForm((v) => ({
+            ...v,
+            czKurs: String(data2.rates.CZK).replace(".", ","),
+            plKurs: String(data2.rates.PLN).replace(".", ","),
+          }));
+          setKursStatus(`Kurse vom ${data2.time_last_update_utc || "heute"} (Ersatzquelle)`);
+        } catch (e2) {
           setKursStatus("Kurse konnten nicht automatisch geladen werden – bitte manuell eintragen.");
         }
       };
 
       useEffect(() => { kurseLaden(); }, []);
-
-      useEffect(() => {
-        if (state && state.aktuellerPreis && vForm.dePreis === "") {
-          setVForm((v) => ({ ...v, dePreis: String(state.aktuellerPreis).replace(".", ",") }));
-        }
-      }, [state && state.aktuellerPreis]);
 
       const speichern = async (neu) => {
         setState(neu);
@@ -329,11 +340,22 @@
 
       const calc = berechne(state);
 
+      const durchschnittsMenge = (() => {
+        const alle = [
+          ...(state.tankungen || []),
+          ...((state.history || []).flatMap((h) => h.tankungen || [])),
+        ];
+        const mitGesamt = alle.filter((t) => t.gesamt != null && t.gesamt > 0);
+        if (mitGesamt.length === 0) return null;
+        const summe = mitGesamt.reduce((s, t) => s + t.gesamt, 0);
+        return { wert: summe / mitGesamt.length, anzahl: mitGesamt.length };
+      })();
+
       const vergleich = (() => {
         const de = parseDE(vForm.dePreis);
-        const menge = parseDE(vForm.menge);
+        const menge = durchschnittsMenge ? durchschnittsMenge.wert : null;
         const verbrauch = state.verbrauch;
-        if (!isFinite(de) || de <= 0 || !isFinite(menge) || menge <= 0 || !isFinite(verbrauch) || verbrauch <= 0) {
+        if (!isFinite(de) || de <= 0 || !menge || menge <= 0 || !isFinite(verbrauch) || verbrauch <= 0) {
           return null;
         }
         const berechneLand = (preisRoh, kursRoh, kmRoh) => {
@@ -987,13 +1009,18 @@
                     Live-Preise Kamenz öffnen ↗
                   </a>
                   <div className="grid grid-cols-2 gap-2 mt-2">
-                    <Feld label="Zu tankende Menge l">
-                      <input inputMode="decimal" placeholder="z. B. 68" className={inputCls} value={vForm.menge} onChange={(e) => setVForm({ ...vForm, menge: e.target.value })} />
+                    <Feld label="Ø Tankmenge">
+                      <div className={inputCls + " bg-slate-50 text-slate-500"}>
+                        {durchschnittsMenge ? `${fmtNum(durchschnittsMenge.wert)} l` : "noch keine Daten"}
+                      </div>
                     </Feld>
                     <Feld label="Verbrauch Roomi">
                       <div className={inputCls + " bg-slate-50 text-slate-500"}>{fmtNum(state.verbrauch)} l/100 km</div>
                     </Feld>
                   </div>
+                  <p className="mt-1 text-[12px] text-slate-400">
+                    {durchschnittsMenge ? `Durchschnitt aus ${durchschnittsMenge.anzahl} Tankung${durchschnittsMenge.anzahl === 1 ? "" : "en"}` : "Noch keine Tankung mit Gesamtmenge erfasst."}
+                  </p>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <p className="text-[12px] text-slate-400">{kursStatus}</p>
                     <button onClick={kurseLaden} className="shrink-0 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-3 py-1.5 text-[12px] transition-colors">
