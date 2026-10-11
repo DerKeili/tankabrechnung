@@ -54,14 +54,18 @@
       tankungen: [], fahrten: [], helgaFahrten: [], history: [],
     };
 
-    function mapFahrten(liste, verbrauch) {
+    function mapFahrten(liste, aktuellerVerbrauch) {
       return liste.map((f) => {
         if (f.endKm == null) {
           return { ...f, km: null, liter: null, kosten: 0, offen: true };
         }
+        // Verbrauch wird bei Fahrtbeginn eingefroren (f.verbrauch), damit spätere
+        // Tankungen die Kosten bereits erfasster Fahrten nicht rückwirkend ändern.
+        // Fallback auf den aktuellen Wert nur für ältere Einträge ohne gespeicherten Snapshot.
+        const verwendeterVerbrauch = f.verbrauch != null ? f.verbrauch : aktuellerVerbrauch;
         const km = Math.max(0, f.endKm - f.startKm);
-        const liter = (km / 100) * (verbrauch || 0);
-        return { ...f, km, liter, kosten: liter * f.preis, offen: false };
+        const liter = (km / 100) * (verwendeterVerbrauch || 0);
+        return { ...f, km, liter, kosten: liter * f.preis, verwendeterVerbrauch, offen: false };
       });
     }
 
@@ -183,6 +187,8 @@
       const [bearbeiteHelgaFahrtId, setBearbeiteHelgaFahrtId] = useState(null);
       const [verbrauchInput, setVerbrauchInput] = useState("");
       const [helgaVerbrauchInput, setHelgaVerbrauchInput] = useState("");
+      const [vForm, setVForm] = useState({ dePreis: "", czPreis: "", czKurs: "", plPreis: "", plKurs: "", kmCZ: "", kmPL: "", menge: "" });
+      const [kursStatus, setKursStatus] = useState("");
 
       useEffect(() => {
         sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -229,6 +235,30 @@
         setHForm((h) => (bearbeiteHelgaFahrtId ? h : { ...h, startKm: String(letzte.endKm) }));
       }, [state && state.helgaFahrten]);
 
+      const kurseLaden = async () => {
+        setKursStatus("Lade Wechselkurse …");
+        try {
+          const res = await fetch("https://api.frankfurter.app/latest?from=EUR&to=CZK,PLN");
+          const data = await res.json();
+          setVForm((v) => ({
+            ...v,
+            czKurs: String(data.rates.CZK).replace(".", ","),
+            plKurs: String(data.rates.PLN).replace(".", ","),
+          }));
+          setKursStatus(`Kurse vom ${data.date} (1 € = X CZK/PLN)`);
+        } catch (e) {
+          setKursStatus("Kurse konnten nicht automatisch geladen werden – bitte manuell eintragen.");
+        }
+      };
+
+      useEffect(() => { kurseLaden(); }, []);
+
+      useEffect(() => {
+        if (state && state.aktuellerPreis && vForm.dePreis === "") {
+          setVForm((v) => ({ ...v, dePreis: String(state.aktuellerPreis).replace(".", ",") }));
+        }
+      }, [state && state.aktuellerPreis]);
+
       const speichern = async (neu) => {
         setState(neu);
         try {
@@ -262,6 +292,33 @@
       }
 
       const calc = berechne(state);
+
+      const vergleich = (() => {
+        const de = parseDE(vForm.dePreis);
+        const menge = parseDE(vForm.menge);
+        const verbrauch = state.verbrauch;
+        if (!isFinite(de) || de <= 0 || !isFinite(menge) || menge <= 0 || !isFinite(verbrauch) || verbrauch <= 0) {
+          return null;
+        }
+        const berechneLand = (preisRoh, kursRoh, kmRoh) => {
+          const preis = parseDE(preisRoh);
+          const kurs = parseDE(kursRoh);
+          const kmUmweg = parseDE(kmRoh);
+          if (!isFinite(preis) || preis <= 0 || !isFinite(kurs) || kurs <= 0) return null;
+          const preisEUR = preis / kurs;
+          const ersparnisProLiter = de - preisEUR;
+          const ersparnisGesamt = ersparnisProLiter * menge;
+          const umwegLiter = isFinite(kmUmweg) && kmUmweg > 0 ? (kmUmweg / 100) * verbrauch : 0;
+          const umwegKosten = umwegLiter * de;
+          const netto = ersparnisGesamt - umwegKosten;
+          return { preisEUR, ersparnisProLiter, ersparnisGesamt, umwegKosten, netto };
+        };
+        return {
+          de, menge, verbrauch,
+          cz: berechneLand(vForm.czPreis, vForm.czKurs, vForm.kmCZ),
+          pl: berechneLand(vForm.plPreis, vForm.plKurs, vForm.kmPL),
+        };
+      })();
       const offeneFahrt = state.fahrten.find((f) => f.endKm == null) || null;
       const offeneHelgaFahrt = (state.helgaFahrten || []).find((f) => f.endKm == null) || null;
       const letzterPreis = state.tankungen.length
@@ -360,7 +417,7 @@
           ...state,
           fahrten: [...state.fahrten, {
             id: uid(), datum: fForm.datum, startKm, startZeit: zeitJetzt(),
-            endKm: null, endZeit: null, preis: letzterPreis,
+            endKm: null, endZeit: null, preis: letzterPreis, verbrauch: state.verbrauch,
           }],
         });
         setFForm({ datum: today(), startKm: "", endKm: "" });
@@ -434,7 +491,7 @@
           ...state,
           helgaFahrten: [...(state.helgaFahrten || []), {
             id: uid(), datum: hForm.datum, startKm, startZeit: zeitJetzt(),
-            endKm: null, endZeit: null, preis: letzterPreis,
+            endKm: null, endZeit: null, preis: letzterPreis, verbrauch: state.helgaVerbrauch,
           }],
         });
         setHForm({ datum: today(), startKm: "", endKm: "" });
@@ -594,7 +651,7 @@
             )}
 
             <nav className="flex gap-1 bg-slate-200 rounded-xl p-1">
-              {[["aktuell", "Erfassen"], ["verlauf", `Verlauf (${state.history.length})`], ["einstellungen", "Fahrzeuge"]].map(([key, label]) => (
+              {[["aktuell", "Erfassen"], ["verlauf", `Verlauf (${state.history.length})`], ["einstellungen", "Fahrzeuge"], ["vergleich", "Vergleich"]].map(([key, label]) => (
                 <button key={key} onClick={() => setTab(key)}
                   className={"flex-1 rounded-lg py-2 text-[14px] font-semibold transition-colors " +
                     (tab === key ? "bg-white text-teal-900 shadow-sm" : "text-slate-600")}>
@@ -737,6 +794,11 @@
                             {f.offen
                               ? `${fmtDate(f.datum)}${f.startZeit ? ", " + f.startZeit : ""} · unterwegs seit ${fmtNum(f.startKm, 0)} km`
                               : `${fmtDate(f.datum)} · ${fmtNum(f.km, 0)} km · ${fmtNum(f.liter, 1)} l${f.startZeit && f.endZeit ? ` · ${f.startZeit}–${f.endZeit}` : ""}`}
+                            {!f.offen && (
+                              <span className="block text-[12px] text-slate-400">
+                                berechnet mit {fmtNum(f.verwendeterVerbrauch)} l/100 km · {fmtNum(f.preis, 3)} €/l
+                              </span>
+                            )}
                           </span>
                           <span className="flex items-center gap-3">
                             {f.offen
@@ -825,6 +887,11 @@
                             {f.offen
                               ? `${fmtDate(f.datum)}${f.startZeit ? ", " + f.startZeit : ""} · unterwegs seit ${fmtNum(f.startKm, 0)} km`
                               : `${fmtDate(f.datum)} · ${fmtNum(f.km, 0)} km · ${fmtNum(f.liter, 1)} l${f.startZeit && f.endZeit ? ` · ${f.startZeit}–${f.endZeit}` : ""}`}
+                            {!f.offen && (
+                              <span className="block text-[12px] text-slate-400">
+                                berechnet mit {fmtNum(f.verwendeterVerbrauch)} l/100 km · {fmtNum(f.preis, 3)} €/l
+                              </span>
+                            )}
                           </span>
                           <span className="flex items-center gap-3">
                             {f.offen
@@ -870,6 +937,98 @@
                     Fährst du mit Helga (z. B. weil Roomi bei deiner Frau ist), werden die Kosten dieser Fahrten von der Rechnung abgezogen statt addiert.
                   </p>
                 </Abschnitt>
+              </React.Fragment>
+            )}
+
+            {tab === "vergleich" && (
+              <React.Fragment>
+                <Abschnitt titel="Benzinpreisvergleich" hinweis="Tagesaktuelle Preise selbst eintragen (z. B. aus Mapy.cz / Apple Maps) – Wechselkurse lädt die App automatisch.">
+                  <Feld label="E10 Deutschland (Kamenz) €/l">
+                    <input inputMode="decimal" placeholder="z. B. 1,679" className={inputCls} value={vForm.dePreis} onChange={(e) => setVForm({ ...vForm, dePreis: e.target.value })} />
+                  </Feld>
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <Feld label="Zu tankende Menge l">
+                      <input inputMode="decimal" placeholder="z. B. 68" className={inputCls} value={vForm.menge} onChange={(e) => setVForm({ ...vForm, menge: e.target.value })} />
+                    </Feld>
+                    <Feld label="Verbrauch Roomi">
+                      <div className={inputCls + " bg-slate-50 text-slate-500"}>{fmtNum(state.verbrauch)} l/100 km</div>
+                    </Feld>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <p className="text-[12px] text-slate-400">{kursStatus}</p>
+                    <button onClick={kurseLaden} className="shrink-0 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-3 py-1.5 text-[12px] transition-colors">
+                      Kurse neu laden
+                    </button>
+                  </div>
+                </Abschnitt>
+
+                <Abschnitt titel="Tschechien" hinweis="Pb95-Preis in CZK/l, wie auf der Tankstellen-Karte angezeigt.">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Feld label="Preis Pb95 CZK/l">
+                      <input inputMode="decimal" placeholder="z. B. 32,90" className={inputCls} value={vForm.czPreis} onChange={(e) => setVForm({ ...vForm, czPreis: e.target.value })} />
+                    </Feld>
+                    <Feld label="Kurs 1 € = ? CZK">
+                      <input inputMode="decimal" className={inputCls} value={vForm.czKurs} onChange={(e) => setVForm({ ...vForm, czKurs: e.target.value })} />
+                    </Feld>
+                    <div className="col-span-2 min-w-0">
+                      <Feld label="Zusatzstrecke für Umweg (hin+zurück) km">
+                        <input inputMode="numeric" placeholder="z. B. 20" className={inputCls} value={vForm.kmCZ} onChange={(e) => setVForm({ ...vForm, kmCZ: e.target.value })} />
+                      </Feld>
+                    </div>
+                  </div>
+                  {vergleich && vergleich.cz && (
+                    <div className={"mt-3 rounded-xl p-3 text-[14px] " + (vergleich.cz.netto > 0 ? "bg-emerald-50 text-emerald-900" : "bg-red-50 text-red-900")}>
+                      <div className="flex justify-between font-bold">
+                        <span>{vergleich.cz.netto > 0 ? "Lohnt sich" : "Lohnt sich nicht"}</span>
+                        <span className="mono">{vergleich.cz.netto > 0 ? "+" : ""}{fmtEUR(vergleich.cz.netto)}</span>
+                      </div>
+                      <div className="mt-1 text-[12px] opacity-80 space-y-0.5">
+                        <div>Preis dort: {fmtNum(vergleich.cz.preisEUR, 3)} €/l (Ersparnis {fmtNum(vergleich.cz.ersparnisProLiter, 3)} €/l)</div>
+                        <div>Ersparnis durch Preis: {fmtEUR(vergleich.cz.ersparnisGesamt)}</div>
+                        <div>Kosten für Umweg: {fmtEUR(vergleich.cz.umwegKosten)}</div>
+                      </div>
+                    </div>
+                  )}
+                </Abschnitt>
+
+                <Abschnitt titel="Polen" hinweis="Pb95-Preis in PLN/l, wie auf der Tankstellen-Karte angezeigt.">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Feld label="Preis Pb95 PLN/l">
+                      <input inputMode="decimal" placeholder="z. B. 6,50" className={inputCls} value={vForm.plPreis} onChange={(e) => setVForm({ ...vForm, plPreis: e.target.value })} />
+                    </Feld>
+                    <Feld label="Kurs 1 € = ? PLN">
+                      <input inputMode="decimal" className={inputCls} value={vForm.plKurs} onChange={(e) => setVForm({ ...vForm, plKurs: e.target.value })} />
+                    </Feld>
+                    <div className="col-span-2 min-w-0">
+                      <Feld label="Zusatzstrecke für Umweg (hin+zurück) km">
+                        <input inputMode="numeric" placeholder="z. B. 20" className={inputCls} value={vForm.kmPL} onChange={(e) => setVForm({ ...vForm, kmPL: e.target.value })} />
+                      </Feld>
+                    </div>
+                  </div>
+                  {vergleich && vergleich.pl && (
+                    <div className={"mt-3 rounded-xl p-3 text-[14px] " + (vergleich.pl.netto > 0 ? "bg-emerald-50 text-emerald-900" : "bg-red-50 text-red-900")}>
+                      <div className="flex justify-between font-bold">
+                        <span>{vergleich.pl.netto > 0 ? "Lohnt sich" : "Lohnt sich nicht"}</span>
+                        <span className="mono">{vergleich.pl.netto > 0 ? "+" : ""}{fmtEUR(vergleich.pl.netto)}</span>
+                      </div>
+                      <div className="mt-1 text-[12px] opacity-80 space-y-0.5">
+                        <div>Preis dort: {fmtNum(vergleich.pl.preisEUR, 3)} €/l (Ersparnis {fmtNum(vergleich.pl.ersparnisProLiter, 3)} €/l)</div>
+                        <div>Ersparnis durch Preis: {fmtEUR(vergleich.pl.ersparnisGesamt)}</div>
+                        <div>Kosten für Umweg: {fmtEUR(vergleich.pl.umwegKosten)}</div>
+                      </div>
+                    </div>
+                  )}
+                </Abschnitt>
+
+                {vergleich && vergleich.cz && vergleich.pl && (
+                  <p className="text-[13px] text-slate-500 px-1">
+                    {vergleich.cz.netto <= 0 && vergleich.pl.netto <= 0
+                      ? "Aktuell lohnt sich keiner der beiden Umwege – günstiger ist, in Deutschland zu tanken."
+                      : vergleich.cz.netto > vergleich.pl.netto
+                      ? `Tschechien ist aktuell die günstigere Option (${fmtEUR(vergleich.cz.netto - vergleich.pl.netto)} mehr Ersparnis).`
+                      : `Polen ist aktuell die günstigere Option (${fmtEUR(vergleich.pl.netto - vergleich.cz.netto)} mehr Ersparnis).`}
+                  </p>
+                )}
               </React.Fragment>
             )}
 
